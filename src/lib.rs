@@ -437,6 +437,44 @@ impl LspServer {
             file_info.diagnostics = Vec::new();
         }
     }
+
+    fn shutdown(&mut self, force: bool) {
+        let server_name = self.server_info.name.clone();
+        let server_id = self.server_info.id.clone();
+
+        self.stop_dispatcher();
+        self.exit_transport();
+        Logger::debug(&format!(
+            "after exit transport for server {}, server_id {}.",
+            &server_name, &server_id
+        ));
+
+        if force {
+            // Forced cleanup - kill the child process
+            self.kill_child();
+            Logger::info(&format!(
+                "forcefully terminated server {}, server_id {}",
+                &server_name, &server_id
+            ));
+        } else {
+            // Graceful cleanup
+            if let Some(threads) = self.transport_threads.take() {
+                threads.join();
+                Logger::info(&format!(
+                    "after thread join for server {}, server_id {}.",
+                    &server_name, &server_id
+                ));
+            }
+
+            if let Some(mut child) = self.child.take() {
+                let _ = child.wait();
+                Logger::info(&format!(
+                    "after child wait for server {}, server_id {}.",
+                    &server_name, &server_id
+                ));
+            }
+        }
+    }
 }
 
 struct Project {
@@ -714,26 +752,7 @@ fn shutdown(env: &Env, root_uri: String, file_type: String, req: String) -> Resu
                                 let exit = Notification::new("exit".to_string(), json!({}));
 
                                 _notify(&mut server, exit);
-
-                                server.stop_dispatcher();
-                                server.exit_transport();
-                                Logger::info(&format!(
-                                    "after exit transport for server {}, server_id {}.",
-                                    &server_name, &server_id
-                                ));
-                                // waiting for transport_threads to exit
-                                server.transport_threads.take().unwrap().join();
-                                Logger::info(&format!(
-                                    "after thread join for server {}, server_id {}.",
-                                    &server_name, &server_id
-                                ));
-                                // waiting for child to exit
-                                server.child.take().unwrap().wait();
-                                Logger::info(&format!(
-                                    "after child wait for server {}, server_id {}.",
-                                    &server_name, &server_id
-                                ));
-
+                                server.shutdown(false); // Graceful
                                 return;
                             }
                         }
@@ -743,10 +762,7 @@ fn shutdown(env: &Env, root_uri: String, file_type: String, req: String) -> Resu
                     }
 
                     if Instant::now().duration_since(start_time).as_millis() > 3 * 1000 {
-                        server.stop_dispatcher();
-                        server.exit_transport();
-                        server.kill_child();
-
+                        server.shutdown(true); // Forced
                         return;
                     }
                 }
