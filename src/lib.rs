@@ -822,25 +822,27 @@ fn server(env: &Env, root_uri: String, file_type: String) -> Result<Option<Strin
 }
 
 fn _request_async(server: &mut LspServer, req: Request) -> bool {
-    let method = req.method.clone();
-    let id = req.id.clone();
-    let request_tick = req.request_tick.clone().unwrap();
+    let request_tick = match &req.request_tick {
+        Some(tick) => tick.clone(),
+        None => {
+            Logger::error(&format!("no request_tick in req {:?}", &req));
+            return false;
+        }
+    };
 
-    server.update_request_info(id.clone(), request_tick);
+    server.update_request_info(req.id.clone(), request_tick);
 
-    if method == "textDocument/didChange" || method == "textDocument/didClose" {
+    if req.method == "textDocument/didChange" || req.method == "textDocument/didClose" {
         let param = serde_json::from_value::<DidChangeTextDocumentParams>(req.params.clone());
         if let Ok(param) = param {
             server.clear_diagnostics(param.text_document.uri.as_ref());
         }
     }
 
-    let write_result = server.write(Message::Request(req));
-    match write_result {
+    match server.write(Message::Request(req)) {
         Ok(_) => true,
         Err(e) => {
             Logger::error(&format!("request error {:#?}", e));
-
             false
         }
     }
@@ -853,41 +855,19 @@ fn request_async(
     file_type: String,
     req: String,
 ) -> Result<Option<bool>> {
-    let mut projects = projects().lock().unwrap();
-    if let Some(mut p) = projects.get_mut(&root_uri) {
-        if let Some(mut server) = p.servers.get_mut(&file_type) {
-            if server.status != SERVER_STATUS_RUNNING {
+    with_server(env, &root_uri, &file_type, |server| {
+        Logger::trace(&format!("request {}", &req));
+
+        let msg = match serde_json::from_str::<Request>(&req) {
+            Ok(m) => m,
+            Err(e) => {
+                Logger::error(&format!("request is not valid json {}: {}", &req, e));
                 return Ok(None);
             }
-            Logger::trace(&format!("request {}", &req));
+        };
 
-            let msg = serde_json::from_str::<Request>(&req);
-            if msg.is_err() {
-                Logger::error(&format!("request is not valid json {}", &req));
-                return Ok(None);
-            }
-            let msg = msg.unwrap();
-
-            if msg.request_tick.is_none() {
-                Logger::error(&format!("no request_tick is req {}", &req));
-                return Ok(None);
-            }
-
-            if _request_async(server, msg) {
-                Ok(Some(true))
-            } else {
-                Ok(None)
-            }
-        } else {
-            env.message(&format!("No server for {}", &file_type));
-
-            Ok(None)
-        }
-    } else {
-        env.message(&format!("No project for {} {}", &root_uri, &file_type));
-
-        Ok(None)
-    }
+        Ok(_request_async(server, msg).then_some(true))
+    })
 }
 
 fn _notify(server: &mut LspServer, req: Notification) -> Result<Option<bool>> {
