@@ -891,49 +891,28 @@ fn request_async(
 }
 
 fn _notify(server: &mut LspServer, req: Notification) -> Result<Option<bool>> {
-    let write_result = server.write(Message::Notification(req));
-
-    match write_result {
-        Ok(_) => {
-            return Ok(Some(true));
-        }
+    match server.write(Message::Notification(req)) {
+        Ok(_) => Ok(Some(true)),
         Err(e) => {
             Logger::error(&format!("notify error {:#?}", e));
-            return Ok(None);
+            Ok(None)
         }
     }
-
-    Ok(None)
 }
 
 #[defun]
 fn notify(env: &Env, root_uri: String, file_type: String, req: String) -> Result<Option<bool>> {
-    let mut projects = projects().lock().unwrap();
-    if let Some(mut p) = projects.get_mut(&root_uri) {
-        if let Some(mut server) = p.servers.get_mut(&file_type) {
-            if server.status != SERVER_STATUS_RUNNING {
-                env.message("Server is not ready.");
-                return Ok(None);
-            }
-            Logger::trace(&format!("notify {}", &req));
+    with_server(env, &root_uri, &file_type, |server| {
+        Logger::trace(&format!("notify {}", &req));
 
-            let json_object = serde_json::from_str::<Notification>(&req);
-            match json_object {
-                Ok(notification) => {
-                    return _notify(server, notification);
-                }
-                Err(e) => {
-                    env.message(&format!("Invalid json string {}", &req));
-                }
+        match serde_json::from_str::<Notification>(&req) {
+            Ok(n) => _notify(server, n),
+            Err(e) => {
+                Logger::error(&format!("notification is not a valid json {}: {}", &req, e));
+                Ok(None)
             }
-        } else {
-            env.message(&format!("No server for {}", &file_type));
         }
-    } else {
-        env.message(&format!("No project for {} {}", &root_uri, &file_type));
-    }
-
-    Ok(None)
+    })
 }
 
 /// precondition: have called read_latest_response_id and gotten the id.
