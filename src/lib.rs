@@ -1027,20 +1027,9 @@ fn read_latest_response_id(
     root_uri: String,
     file_type: String,
 ) -> Result<Option<String>> {
-    let projects = projects().lock().unwrap();
-    if let Some(p) = projects.get(&root_uri) {
-        if let Some(server) = p.servers.get(&file_type) {
-            let lrid = server.get_latest_response_id();
-
-            return Ok(Some(lrid.to_string()));
-        } else {
-            env.message(&format!("No server for {}", &file_type));
-        }
-    } else {
-        env.message(&format!("No project for {} {}", &root_uri, &file_type));
-    }
-
-    Ok(None)
+    with_server(env, &root_uri, &file_type, |server| {
+        Ok(Some(server.get_latest_response_id().to_string()))
+    })
 }
 
 #[defun]
@@ -1049,18 +1038,7 @@ fn read_latest_response_tick(
     root_uri: String,
     file_type: String,
 ) -> Result<Option<String>> {
-    let projects = projects().lock().unwrap();
-    if let Some(p) = projects.get(&root_uri) {
-        if let Some(server) = p.servers.get(&file_type) {
-            let tick = server.get_latest_response_tick();
-
-            return Ok(Some(tick));
-        } else {
-            env.message(&format!("No server for {}", &file_type));
-        }
-    } else {
-        env.message(&format!("No project for {} {}", &root_uri, &file_type));
-    }
-
-    Ok(None)
+    with_server(env, &root_uri, &file_type, |server| {
+        Ok(Some(server.get_latest_response_tick()))
+    })
 }
