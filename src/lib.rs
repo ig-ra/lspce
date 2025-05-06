@@ -945,52 +945,18 @@ fn read_response_exact(
     id: String,
     method: String,
 ) -> Result<Option<String>> {
-    let req_id = RequestId::from(id);
-
-    let projects = projects().lock().unwrap();
-    if let Some(p) = projects.get(&root_uri) {
-        if let Some(server) = p.servers.get(&file_type) {
-            let response = server.read_response_exact(req_id, method);
-            match response {
-                Some(r) => {
-                    return Ok(Some(r.content));
-                }
-                None => {
-                    return Ok(None);
-                }
-            }
-        } else {
-            env.message(&format!("No server for {}", &file_type));
-        }
-    } else {
-        env.message(&format!("No project for {} {}", &root_uri, &file_type));
-    }
-
-    Ok(None)
+    with_server(env, &root_uri, &file_type, |server| {
+        Ok(server
+            .read_response_exact(RequestId::from(id), method)
+            .map(|r| r.content))
+    })
 }
 
 #[defun]
 fn read_notification(env: &Env, root_uri: String, file_type: String) -> Result<Option<String>> {
-    let projects = projects().lock().unwrap();
-    if let Some(p) = projects.get(&root_uri) {
-        if let Some(server) = p.servers.get(&file_type) {
-            let notification = server.read_notification();
-            match notification {
-                Some(r) => {
-                    return Ok(Some(r.content));
-                }
-                None => {
-                    return Ok(None);
-                }
-            }
-        } else {
-            env.message(&format!("No server for {}", &file_type));
-        }
-    } else {
-        env.message(&format!("No project for {} {}", &root_uri, &file_type));
-    }
-
-    Ok(None)
+    with_server(env, &root_uri, &file_type, |server| {
+        Ok(server.read_notification().map(|r| r.content))
+    })
 }
 
 #[defun]
