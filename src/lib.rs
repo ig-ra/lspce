@@ -565,6 +565,33 @@ fn projects() -> &'static Arc<Mutex<HashMap<String, Project>>> {
     unsafe { &*PROJECTS.as_mut_ptr() }
 }
 
+fn with_server<F, T>(env: &Env, root_uri: &str, file_type: &str, f: F) -> Result<Option<T>>
+where
+    F: FnOnce(&mut LspServer) -> Result<Option<T>>,
+{
+    let mut projects = projects().lock().unwrap();
+
+    match projects.get_mut(root_uri) {
+        Some(proj) => match proj.servers.get_mut(file_type) {
+            Some(server) => {
+                if server.status != SERVER_STATUS_RUNNING {
+                    env.message("Server is not ready");
+                    return Ok(None);
+                }
+                f(server)
+            }
+            None => {
+                env.message(&format!("No server for {}", file_type));
+                Ok(None)
+            }
+        },
+        None => {
+            env.message(&format!("No project for {} {}", root_uri, file_type));
+            Ok(None)
+        }
+    }
+}
+
 /// Connect to an existing server or create a server subprocess and then connect to it.
 #[defun]
 fn connect(
