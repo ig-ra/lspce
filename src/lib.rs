@@ -925,25 +925,22 @@ fn read_file_diagnostics(
     file_type: String,
     uri: String,
 ) -> Result<Option<String>> {
-    let projects = projects().lock().unwrap();
-    if let Some(p) = projects.get(&root_uri) {
-        if let Some(server) = p.servers.get(&file_type) {
-            let mut server_data = server.server_data.lock().unwrap();
-            if let Some(file_info) = server_data.file_infos.get_mut(&uri) {
-                let result = serde_json::to_string(&file_info.diagnostics);
-
-                if let Ok(result) = result {
-                    return Ok(Some(result));
+    with_server(env, &root_uri, &file_type, |server| {
+        let mut server_data = server.server_data.lock().unwrap();
+        match server_data.file_infos.get(&uri) {
+            Some(file_info) => match serde_json::to_string(&file_info.diagnostics) {
+                Ok(result) => Ok(Some(result)),
+                Err(e) => {
+                    Logger::error(&format!(
+                        "Failed to serialize diagnostics for {}: {}",
+                        &uri, e
+                    ));
+                    Ok(None)
                 }
-            }
-        } else {
-            env.message(&format!("No server for {}", &file_type));
+            },
+            None => Ok(None),
         }
-    } else {
-        env.message(&format!("No project for {} {}", &root_uri, &file_type));
-    }
-
-    Ok(None)
+    })
 }
 
 #[defun]
