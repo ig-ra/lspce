@@ -68,10 +68,7 @@ struct FileInfo {
 
 impl FileInfo {
     pub fn new(uri: String) -> FileInfo {
-        FileInfo {
-            uri,
-            diagnostics: Vec::new(),
-        }
+        FileInfo { uri, diagnostics: Vec::new() }
     }
 }
 
@@ -147,11 +144,7 @@ struct LspServer {
 
 impl LspServer {
     pub fn new(
-        root_uri: String,
-        cmd: String,
-        cmd_args: String,
-        initialize_req: String,
-        emacs_envs: String,
+        root_uri: String, cmd: String, cmd_args: String, initialize_req: String, emacs_envs: String,
     ) -> Option<LspServer> {
         let args = cmd_args.split_ascii_whitespace().collect::<Vec<&str>>();
 
@@ -168,15 +161,13 @@ impl LspServer {
                         .stdout(Stdio::piped())
                         .stderr(Stdio::piped())
                         .envs(envs)
-                        .spawn();                    
+                        .spawn();
                 }
                 Err(e) => {
-                    Logger::error(&format!(
-                        "deserializing emacs_envs failed with error {:?}", e
-                    ));
+                    Logger::error(&format!("deserializing emacs_envs failed with error {:?}", e));
                     return None;
                 }
-            } 
+            }
         } else {
             child = Command::new(cmd)
                 .args(args)
@@ -213,18 +204,13 @@ impl LspServer {
 
             Some(server)
         } else {
-            Logger::error(&format!(
-                "create child process failed with error {:?}",
-                child.err().unwrap(),
-            ));
+            Logger::error(&format!("create child process failed with error {:?}", child.err().unwrap(),));
             None
         }
     }
 
     fn start_dispatcher(
-        transport: Arc<Mutex<Option<Connection>>>,
-        exit: Arc<Mutex<bool>>,
-        server_data: Arc<Mutex<LspServerData>>,
+        transport: Arc<Mutex<Option<Connection>>>, exit: Arc<Mutex<bool>>, server_data: Arc<Mutex<LspServerData>>,
     ) -> thread::JoinHandle<()> {
         let handle = thread::spawn(move || loop {
             {
@@ -261,10 +247,7 @@ impl LspServer {
                         let request_tick = server_data.request_ticks.get(&id);
                         if (request_tick.is_some()) {
                             let request_tick = request_tick.unwrap().clone();
-                            Logger::debug(&format!(
-                                "Request tick for id {} is {}",
-                                &id, &request_tick
-                            ));
+                            Logger::debug(&format!("Request tick for id {} is {}", &id, &request_tick));
                             if (request_tick.eq(&server_data.latest_request_tick)) {
                                 r.request_tick = request_tick.clone();
                                 server_data.responses.push_back(r);
@@ -293,15 +276,12 @@ impl LspServer {
                     Message::Notification(r) => {
                         // cacha diagnostics so they won't pour into Emacs
                         if r.method.eq("textDocument/publishDiagnostics") {
-                            let mut params =
-                                serde_json::from_value::<PublishDiagnosticsParams>(r.params)
-                                    .unwrap();
+                            let mut params = serde_json::from_value::<PublishDiagnosticsParams>(r.params).unwrap();
 
                             let uri = params.uri.as_str().to_string();
                             let mut file_info = FileInfo::new(uri.clone());
                             // cache no more than MAX_DIAGNOSTICS_COUNT diagnostics
-                            let max_diagnostic_count =
-                                MAX_DIAGNOSTICS_COUNT.load(Ordering::Relaxed);
+                            let max_diagnostic_count = MAX_DIAGNOSTICS_COUNT.load(Ordering::Relaxed);
                             if max_diagnostic_count < 0 {
                                 file_info.diagnostics = params.diagnostics;
                             } else if params.diagnostics.len() > max_diagnostic_count as usize {
@@ -410,10 +390,7 @@ impl LspServer {
         server_data.responses.append(&mut reserved);
 
         if result.is_none() {
-            Logger::trace(&format!(
-                "read_response_exact get null for request_id {}, method {}",
-                id, method
-            ));
+            Logger::trace(&format!("read_response_exact get null for request_id {}, method {}", id, method));
         }
 
         result
@@ -444,34 +421,22 @@ impl LspServer {
 
         self.stop_dispatcher();
         self.exit_transport();
-        Logger::debug(&format!(
-            "after exit transport for server {}, server_id {}.",
-            &server_name, &server_id
-        ));
+        Logger::debug(&format!("after exit transport for server {}, server_id {}.", &server_name, &server_id));
 
         if force {
             // Forced cleanup - kill the child process
             self.kill_child();
-            Logger::info(&format!(
-                "forcefully terminated server {}, server_id {}",
-                &server_name, &server_id
-            ));
+            Logger::info(&format!("forcefully terminated server {}, server_id {}", &server_name, &server_id));
         } else {
             // Graceful cleanup
             if let Some(threads) = self.transport_threads.take() {
                 threads.join();
-                Logger::info(&format!(
-                    "after thread join for server {}, server_id {}.",
-                    &server_name, &server_id
-                ));
+                Logger::info(&format!("after thread join for server {}, server_id {}.", &server_name, &server_id));
             }
 
             if let Some(mut child) = self.child.take() {
                 let _ = child.wait();
-                Logger::info(&format!(
-                    "after child wait for server {}, server_id {}.",
-                    &server_name, &server_id
-                ));
+                Logger::info(&format!("after child wait for server {}, server_id {}.", &server_name, &server_id));
             }
         }
     }
@@ -484,10 +449,7 @@ struct Project {
 
 impl Project {
     pub fn new(root_uri: String) -> Project {
-        Project {
-            root_uri,
-            servers: HashMap::new(),
-        }
+        Project { root_uri, servers: HashMap::new() }
     }
 }
 
@@ -556,11 +518,7 @@ fn projects() -> &'static Arc<Mutex<HashMap<String, Project>>> {
     static mut PROJECTS: MaybeUninit<Arc<Mutex<HashMap<String, Project>>>> = MaybeUninit::uninit();
     static ONCE: Once = Once::new();
 
-    ONCE.call_once(|| unsafe {
-        PROJECTS
-            .as_mut_ptr()
-            .write(Arc::new(Mutex::new(HashMap::new())))
-    });
+    ONCE.call_once(|| unsafe { PROJECTS.as_mut_ptr().write(Arc::new(Mutex::new(HashMap::new()))) });
 
     unsafe { &*PROJECTS.as_mut_ptr() }
 }
@@ -595,40 +553,23 @@ where
 /// Connect to an existing server or create a server subprocess and then connect to it.
 #[defun]
 fn connect(
-    env: &Env,
-    root_uri: String,
-    lsp_type: String,
-    cmd: String,
-    cmd_args: String,
-    initialize_req: String,
-    timeout: i32,
+    env: &Env, root_uri: String, lsp_type: String, cmd: String, cmd_args: String, initialize_req: String, timeout: i32,
     emacs_envs: String,
 ) -> Result<Option<String>> {
-    Logger::info(&format!(
-        "start initializing server for lsp_type {} in project {}",
-        lsp_type, root_uri
-    ));
+    Logger::info(&format!("start initializing server for lsp_type {} in project {}", lsp_type, root_uri));
 
     let mut projects = projects().lock().unwrap();
 
     if let Some(p) = projects.get(&root_uri) {
         if let Some(s) = p.servers.get(&lsp_type) {
-            Logger::info(&format!(
-                "server created already for lsp_type {} in project {}",
-                lsp_type, root_uri
-            ));
+            Logger::info(&format!("server created already for lsp_type {} in project {}", lsp_type, root_uri));
 
             return Ok(Some(serde_json::to_string(&s.server_info).unwrap()));
         }
     }
 
-    let mut server = LspServer::new(
-        root_uri.clone(),
-        cmd.clone(),
-        cmd_args.clone(),
-        initialize_req.clone(),
-        emacs_envs.clone(),
-    );
+    let mut server =
+        LspServer::new(root_uri.clone(), cmd.clone(), cmd_args.clone(), initialize_req.clone(), emacs_envs.clone());
     if let Some(mut s) = server {
         let server_info: LspServerInfo;
 
@@ -654,10 +595,7 @@ fn connect(
             }
         }
 
-        Logger::info(&format!(
-            "Connected to server successfully. server capabilities {}",
-            &server_info.capabilities
-        ));
+        Logger::info(&format!("Connected to server successfully. server capabilities {}", &server_info.capabilities));
         Ok(Some(serde_json::to_string(&server_info).unwrap()))
     } else {
         Logger::error(&format!(
@@ -671,13 +609,7 @@ fn connect(
     }
 }
 
-fn initialize(
-    env: &Env,
-    root_uri: String,
-    server: &mut LspServer,
-    req_str: String,
-    timeout: i32,
-) -> bool {
+fn initialize(env: &Env, root_uri: String, server: &mut LspServer, req_str: String, timeout: i32) -> bool {
     Logger::debug(&format!("raw initialize request {:#?}", req_str));
 
     let msg = serde_json::from_str::<Request>(&req_str);
@@ -720,8 +652,7 @@ fn initialize(
                         server.server_info.name = si.name.clone();
                         server.server_info.version = si.version.expect("");
                     }
-                    server.server_info.capabilities =
-                        serde_json::to_string(&ir.capabilities).unwrap();
+                    server.server_info.capabilities = serde_json::to_string(&ir.capabilities).unwrap();
 
                     return true;
                 } else {
@@ -732,11 +663,8 @@ fn initialize(
                 thread::sleep(std::time::Duration::from_millis(10));
             }
         }
-        if timeout > 0
-            && Instant::now().duration_since(start_time).as_millis() > timeout as u128 * 1000
-        {
+        if timeout > 0 && Instant::now().duration_since(start_time).as_millis() > timeout as u128 * 1000 {
             Logger::error("timeout when initializing server.");
-
             return false;
         }
     }
@@ -751,10 +679,7 @@ fn shutdown(env: &Env, root_uri: String, file_type: String, req: String) -> Resu
             thread::spawn(move || {
                 let server_name = server.server_info.name.clone();
                 let server_id = server.server_info.id.clone();
-                Logger::info(&format!(
-                    "start to shut down server {}, server_id {}",
-                    &server_name, &server_id
-                ));
+                Logger::info(&format!("start to shut down server {}, server_id {}", &server_name, &server_id));
 
                 let msg = serde_json::from_str::<Request>(&req);
                 if msg.is_err() {
@@ -817,7 +742,6 @@ fn server(env: &Env, root_uri: String, file_type: String) -> Result<Option<Strin
             return Ok(Some(serde_json::to_string(&s.server_info).unwrap()));
         }
     }
-
     Ok(None)
 }
 
