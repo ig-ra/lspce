@@ -565,7 +565,7 @@ fn projects() -> &'static Arc<Mutex<HashMap<String, Project>>> {
     unsafe { &*PROJECTS.as_mut_ptr() }
 }
 
-fn with_server<F, T>(env: &Env, root_uri: &str, file_type: &str, f: F) -> Result<Option<T>>
+fn with_server<F, T>(caller: &str, env: &Env, root_uri: &str, file_type: &str, f: F) -> Result<Option<T>>
 where
     F: FnOnce(&mut LspServer) -> Result<Option<T>>,
 {
@@ -581,12 +581,12 @@ where
                 f(server)
             }
             None => {
-                env.message(&format!("No server for {}", file_type));
+                env.message(&format!("No server for {}. @{}", file_type, caller));
                 Ok(None)
             }
         },
         None => {
-            env.message(&format!("No project for {} {}", root_uri, file_type));
+            env.message(&format!("No project for {} {}. @{}", root_uri, file_type, caller));
             Ok(None)
         }
     }
@@ -849,13 +849,8 @@ fn _request_async(server: &mut LspServer, req: Request) -> bool {
 }
 
 #[defun]
-fn request_async(
-    env: &Env,
-    root_uri: String,
-    file_type: String,
-    req: String,
-) -> Result<Option<bool>> {
-    with_server(env, &root_uri, &file_type, |server| {
+fn request_async(env: &Env, root_uri: String, file_type: String, req: String) -> Result<Option<bool>> {
+    with_server("request", env, &root_uri, &file_type, |server| {
         Logger::trace(&format!("request {}", &req));
 
         let msg = match serde_json::from_str::<Request>(&req) {
@@ -882,7 +877,7 @@ fn _notify(server: &mut LspServer, req: Notification) -> Result<Option<bool>> {
 
 #[defun]
 fn notify(env: &Env, root_uri: String, file_type: String, req: String) -> Result<Option<bool>> {
-    with_server(env, &root_uri, &file_type, |server| {
+    with_server("notify", env, &root_uri, &file_type, |server| {
         Logger::trace(&format!("notify {}", &req));
 
         match serde_json::from_str::<Notification>(&req) {
@@ -898,43 +893,29 @@ fn notify(env: &Env, root_uri: String, file_type: String, req: String) -> Result
 /// precondition: have called read_latest_response_id and gotten the id.
 #[defun]
 fn read_response_exact(
-    env: &Env,
-    root_uri: String,
-    file_type: String,
-    id: String,
-    method: String,
+    env: &Env, root_uri: String, file_type: String, id: String, method: String,
 ) -> Result<Option<String>> {
-    with_server(env, &root_uri, &file_type, |server| {
-        Ok(server
-            .read_response_exact(RequestId::from(id), method)
-            .map(|r| r.content))
+    with_server("read_response_exact", env, &root_uri, &file_type, |server| {
+        Ok(server.read_response_exact(RequestId::from(id), method).map(|r| r.content))
     })
 }
 
 #[defun]
 fn read_notification(env: &Env, root_uri: String, file_type: String) -> Result<Option<String>> {
-    with_server(env, &root_uri, &file_type, |server| {
+    with_server("read_notification", env, &root_uri, &file_type, |server| {
         Ok(server.read_notification().map(|r| r.content))
     })
 }
 
 #[defun]
-fn read_file_diagnostics(
-    env: &Env,
-    root_uri: String,
-    file_type: String,
-    uri: String,
-) -> Result<Option<String>> {
-    with_server(env, &root_uri, &file_type, |server| {
+fn read_file_diagnostics(env: &Env, root_uri: String, file_type: String, uri: String) -> Result<Option<String>> {
+    with_server("read_file_diagnostics", env, &root_uri, &file_type, |server| {
         let mut server_data = server.server_data.lock().unwrap();
         match server_data.file_infos.get(&uri) {
             Some(file_info) => match serde_json::to_string(&file_info.diagnostics) {
                 Ok(result) => Ok(Some(result)),
                 Err(e) => {
-                    Logger::error(&format!(
-                        "Failed to serialize diagnostics for {}: {}",
-                        &uri, e
-                    ));
+                    Logger::error(&format!("Failed to serialize diagnostics for {}: {}", &uri, e));
                     Ok(None)
                 }
             },
@@ -944,23 +925,15 @@ fn read_file_diagnostics(
 }
 
 #[defun]
-fn read_latest_response_id(
-    env: &Env,
-    root_uri: String,
-    file_type: String,
-) -> Result<Option<String>> {
-    with_server(env, &root_uri, &file_type, |server| {
+fn read_latest_response_id(env: &Env, root_uri: String, file_type: String) -> Result<Option<String>> {
+    with_server("read_latest_response_id", env, &root_uri, &file_type, |server| {
         Ok(Some(server.get_latest_response_id().to_string()))
     })
 }
 
 #[defun]
-fn read_latest_response_tick(
-    env: &Env,
-    root_uri: String,
-    file_type: String,
-) -> Result<Option<String>> {
-    with_server(env, &root_uri, &file_type, |server| {
+fn read_latest_response_tick(env: &Env, root_uri: String, file_type: String) -> Result<Option<String>> {
+    with_server("read_latest_response_tick", env, &root_uri, &file_type, |server| {
         Ok(Some(server.get_latest_response_tick()))
     })
 }
