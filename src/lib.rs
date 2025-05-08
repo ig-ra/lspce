@@ -456,23 +456,31 @@ impl Project {
 // Emacs won't load the module without this.
 emacs::plugin_is_GPL_compatible!();
 
+trait EnvExt {
+    fn lspce_message(&self, text: impl AsRef<str>) -> Result<Value<'_>>;
+}
+
+impl EnvExt for Env {
+    fn lspce_message(&self, text: impl AsRef<str>) -> Result<Value<'_>> {
+        self.message(format!("[lspce-module] {}", text.as_ref()))
+    }
+}
+
 // Register the initialization hook that Emacs will call when it loads the module.
 #[emacs::module(name("lspce-module"))]
 fn init(env: &Env) -> Result<Value<'_>> {
-    env.message("Done loading!")
+    env.lspce_message("Done loading")
 }
 
 #[defun]
 fn change_max_diagnostics_count(env: &Env, count: i32) -> Result<Value<'_>> {
     MAX_DIAGNOSTICS_COUNT.store(count, Ordering::Relaxed);
-
-    env.message(format!("max diagnostics changed to {}!", count))
+    env.lspce_message(format!("Set max diagnostics count to {}", count))
 }
 
 #[defun]
 fn read_max_diagnostics_count(env: &Env) -> Result<i32> {
     let count = MAX_DIAGNOSTICS_COUNT.load(Ordering::Relaxed);
-
     Ok(count)
 }
 
@@ -480,29 +488,25 @@ fn read_max_diagnostics_count(env: &Env) -> Result<i32> {
 #[defun]
 fn disable_logging(env: &Env) -> Result<Value<'_>> {
     LOG_LEVEL.store(LOG_DISABLED, Ordering::Relaxed);
-
-    env.message("Logging is disabled!")
+    env.lspce_message("Logging is disabled")
 }
 
 /// enable logging to /tmp/lspce.log
 #[defun]
 fn enable_logging(env: &Env) -> Result<Value<'_>> {
     LOG_LEVEL.store(LOG_DEBUG, Ordering::Relaxed);
-
-    env.message("Logging is enabled!")
+    env.lspce_message("Logging is enabled")
 }
 
 #[defun]
 fn set_log_level(env: &Env, level: u8) -> Result<Value<'_>> {
     LOG_LEVEL.store(level, Ordering::Relaxed);
-
-    env.message(format!("log level set to {}!", level))
+    env.lspce_message(format!("Set log level to {}", level))
 }
 
 #[defun]
 fn get_log_level(env: &Env) -> Result<u8> {
     let log_level = LOG_LEVEL.load(Ordering::Relaxed);
-
     return Ok(log_level);
 }
 
@@ -510,8 +514,7 @@ fn get_log_level(env: &Env) -> Result<u8> {
 #[defun]
 fn set_log_file(env: &Env, file: String) -> Result<Value<'_>> {
     *LOG_FILE_NAME.lock().unwrap() = file.clone();
-
-    env.message(format!("Set logging file to {}", file))
+    env.lspce_message(format!("Set logging file to {}", file))
 }
 
 fn projects() -> &'static Arc<Mutex<HashMap<String, Project>>> {
@@ -533,18 +536,18 @@ where
         Some(proj) => match proj.servers.get_mut(file_type) {
             Some(server) => {
                 if server.status != SERVER_STATUS_RUNNING {
-                    env.message("Server is not ready");
+                    env.lspce_message("Server is not ready");
                     return Ok(None);
                 }
                 f(server)
             }
             None => {
-                env.message(&format!("No server for {}. @{}", file_type, caller));
+                env.lspce_message(&format!("No server for {}. @{}", file_type, caller));
                 Ok(None)
             }
         },
         None => {
-            env.message(&format!("No project for {} {}. @{}", root_uri, file_type, caller));
+            env.lspce_message(&format!("No project for {} {}. @{}", root_uri, file_type, caller));
             Ok(None)
         }
     }
@@ -720,13 +723,11 @@ fn shutdown(env: &Env, root_uri: String, file_type: String, req: String) -> Resu
                 }
             });
         } else {
-            env.message(&format!("No server for {}", &file_type));
-
+            env.lspce_message(&format!("No server for {}", &file_type));
             return Ok(None);
         }
     } else {
-        env.message(&format!("No project for {} {}", &root_uri, &file_type));
-
+        env.lspce_message(&format!("No project for {} {}", &root_uri, &file_type));
         return Ok(None);
     }
 
