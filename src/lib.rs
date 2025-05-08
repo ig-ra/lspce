@@ -674,43 +674,40 @@ fn initialize(env: &Env, root_uri: String, server: &mut LspServer, req_str: Stri
 }
 
 #[defun]
-fn shutdown(env: &Env, root_uri: String, file_type: String, req: String) -> Result<Option<String>> {
+fn shutdown(env: &Env, root_uri: String, file_type: String, request: String) -> Result<Option<String>> {
     let mut projects = projects().lock().unwrap();
     if let Some(mut p) = projects.get_mut(&root_uri) {
         if let Some(mut server) = p.servers.remove(&file_type) {
             // shut down in a seperate thread so as not to block Emacs
             thread::spawn(move || {
-                let server_name = server.server_info.name.clone();
-                let server_id = server.server_info.id.clone();
-                Logger::info(&format!("start to shut down server {}, server_id {}", &server_name, &server_id));
+                Logger::info(&format!(
+                    "start to shut down server {}, server_id {}",
+                    &server.server_info.name, &server.server_info.id
+                ));
 
-                let msg = serde_json::from_str::<Request>(&req);
-                if msg.is_err() {
-                    Logger::error(&format!("request is not valid json {}", &req));
-                    return;
-                }
+                let req = match serde_json::from_str::<Request>(&request) {
+                    Ok(req) => req,
+                    Err(e) => {
+                        Logger::error(&format!("request is not valid json {}: {}", &request, e));
+                        return;
+                    }
+                };
+                let req_id = req.id.clone();
 
-                let msg = msg.unwrap();
-                let id = msg.id.clone();
-
-                if !_request_async(&mut server, msg) {
+                if !_request_async(&mut server, req) {
                     return;
                 }
 
                 let start_time = Instant::now();
                 loop {
-                    let response = server.read_response();
-                    match response {
-                        Some(r) => {
-                            let r_id = r.id.clone();
-                            if r_id.eq(&id) {
-                                let exit = Notification::new("exit".to_string(), json!({}));
-
-                                _notify(&mut server, exit);
-                                server.shutdown(false); // Graceful
-                                return;
-                            }
+                    match server.read_response() {
+                        Some(resp) if resp.id.eq(&req_id) => {
+                            let exit = Notification::new("exit".to_string(), json!({}));
+                            _notify(&mut server, exit);
+                            server.shutdown(false); // Graceful
+                            return;
                         }
+                        Some(_) => continue, // Ignore responses with non-matched id
                         None => {
                             thread::sleep(std::time::Duration::from_millis(10));
                         }
