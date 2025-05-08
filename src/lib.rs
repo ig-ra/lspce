@@ -673,62 +673,69 @@ fn initialize(env: &Env, root_uri: String, server: &mut LspServer, req_str: Stri
     }
 }
 
-#[defun]
-fn shutdown(env: &Env, root_uri: String, file_type: String, request: String) -> Result<Option<String>> {
-    let mut projects = projects().lock().unwrap();
-    if let Some(mut p) = projects.get_mut(&root_uri) {
-        if let Some(mut server) = p.servers.remove(&file_type) {
-            // shut down in a seperate thread so as not to block Emacs
-            thread::spawn(move || {
-                Logger::info(&format!(
-                    "start to shut down server {}, server_id {}",
-                    &server.server_info.name, &server.server_info.id
-                ));
+fn shutdown_server(mut server: LspServer, req: Request) {
+    Logger::info(&format!(
+        "start to shut down server {}, server_id {}",
+        &server.server_info.name, &server.server_info.id
+    ));
 
-                let req = match serde_json::from_str::<Request>(&request) {
-                    Ok(req) => req,
-                    Err(e) => {
-                        Logger::error(&format!("request is not valid json {}: {}", &request, e));
-                        return;
-                    }
-                };
-                let req_id = req.id.clone();
+    let req_id = req.id.clone();
 
-                if !_request_async(&mut server, req) {
-                    return;
-                }
-
-                let start_time = Instant::now();
-                loop {
-                    match server.read_response() {
-                        Some(resp) if resp.id.eq(&req_id) => {
-                            let exit = Notification::new("exit".to_string(), json!({}));
-                            _notify(&mut server, exit);
-                            server.shutdown(false); // Graceful
-                            return;
-                        }
-                        Some(_) => continue, // Ignore responses with non-matched id
-                        None => {
-                            thread::sleep(std::time::Duration::from_millis(10));
-                        }
-                    }
-
-                    if Instant::now().duration_since(start_time).as_millis() > 3 * 1000 {
-                        server.shutdown(true); // Forced
-                        return;
-                    }
-                }
-            });
-        } else {
-            env.lspce_message(&format!("No server for {}", &file_type));
-            return Ok(None);
-        }
-    } else {
-        env.lspce_message(&format!("No project for {} {}", &root_uri, &file_type));
-        return Ok(None);
+    if !_request_async(&mut server, req) {
+        return;
     }
 
-    Ok(None)
+    let start_time = Instant::now();
+    loop {
+        match server.read_response() {
+            Some(resp) if resp.id.eq(&req_id) => {
+                let exit = Notification::new("exit".to_string(), json!({}));
+                _notify(&mut server, exit);
+                server.shutdown(false); // Graceful
+                return;
+            }
+            Some(_) => continue, // Ignore responses with non-matched id
+            None => {
+                thread::sleep(std::time::Duration::from_millis(10));
+            }
+        }
+
+        if Instant::now().duration_since(start_time).as_millis() > 3 * 1000 {
+            server.shutdown(true); // Forced
+            return;
+        }
+    }
+}
+
+#[defun]
+fn shutdown(env: &Env, root_uri: String, file_type: String, request: String) -> Result<Option<bool>> {
+    let server = {
+        let mut projects = projects().lock().unwrap();
+        match projects.get_mut(&root_uri) {
+            None => {
+                env.lspce_message(&format!("No project found for '{}'", &root_uri));
+                return Ok(None);
+            }
+            Some(project) => match project.servers.remove(&file_type) {
+                None => {
+                    env.lspce_message(&format!("No {} server found in project '{}'", &file_type, &root_uri));
+                    return Ok(None);
+                }
+                Some(server) => server,
+            },
+        }
+    };
+
+    let req = match serde_json::from_str::<Request>(&request) {
+        Ok(req) => req,
+        Err(e) => {
+            Logger::error(&format!("request is not valid json {}: {}", &request, e));
+            return Ok(Some(false));
+        }
+    };
+
+    thread::spawn(move || shutdown_server(server, req));
+    Ok(Some(true))
 }
 
 #[defun]
