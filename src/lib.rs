@@ -553,6 +553,23 @@ where
     }
 }
 
+fn find_and_remove_server(env: &Env, root_uri: &str, file_type: &str) -> Result<Option<LspServer>> {
+    let mut projects = projects().lock().unwrap();
+    match projects.get_mut(root_uri) {
+        None => {
+            env.lspce_message(&format!("No project found for '{}'", root_uri));
+            Ok(None)
+        }
+        Some(project) => match project.servers.remove(file_type) {
+            None => {
+                env.lspce_message(&format!("No {} server found in project '{}'", file_type, root_uri));
+                Ok(None)
+            }
+            Some(server) => Ok(Some(server)),
+        },
+    }
+}
+
 /// Connect to an existing server or create a server subprocess and then connect to it.
 #[defun]
 fn connect(
@@ -709,21 +726,9 @@ fn shutdown_server(mut server: LspServer, req: Request) {
 
 #[defun]
 fn shutdown(env: &Env, root_uri: String, file_type: String, request: String) -> Result<Option<bool>> {
-    let server = {
-        let mut projects = projects().lock().unwrap();
-        match projects.get_mut(&root_uri) {
-            None => {
-                env.lspce_message(&format!("No project found for '{}'", &root_uri));
-                return Ok(None);
-            }
-            Some(project) => match project.servers.remove(&file_type) {
-                None => {
-                    env.lspce_message(&format!("No {} server found in project '{}'", &file_type, &root_uri));
-                    return Ok(None);
-                }
-                Some(server) => server,
-            },
-        }
+    let server = match find_and_remove_server(env, &root_uri, &file_type)? {
+        Some(server) => server,
+        None => return Ok(None),
     };
 
     let req = match serde_json::from_str::<Request>(&request) {
