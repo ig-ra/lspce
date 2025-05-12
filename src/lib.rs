@@ -526,48 +526,48 @@ fn projects() -> &'static Arc<Mutex<HashMap<String, Project>>> {
     unsafe { &*PROJECTS.as_mut_ptr() }
 }
 
-fn with_server<F, T>(caller: &str, env: &Env, root_uri: &str, file_type: &str, f: F) -> Result<Option<T>>
+fn with_project<F, T>(caller: &str, env: &Env, root_uri: &str, f: F) -> Result<Option<T>>
 where
-    F: FnOnce(&mut LspServer) -> Result<Option<T>>,
+    F: FnOnce(&mut Project) -> Result<Option<T>>,
 {
-    let mut projects = projects().lock().unwrap();
+    let mut projects_guard = projects().lock().unwrap();
 
-    match projects.get_mut(root_uri) {
-        Some(proj) => match proj.servers.get_mut(file_type) {
-            Some(server) => {
-                if server.status != SERVER_STATUS_RUNNING {
-                    env.lspce_message("Server is not ready");
-                    return Ok(None);
-                }
-                f(server)
-            }
-            None => {
-                env.lspce_message(&format!("No server for {}. @{}", file_type, caller));
-                Ok(None)
-            }
-        },
+    match projects_guard.get_mut(root_uri) {
+        Some(project) => f(project),
         None => {
-            env.lspce_message(&format!("No project for {} {}. @{}", root_uri, file_type, caller));
+            env.lspce_message(&format!("No project found for '{}'. @{}", root_uri, caller));
             Ok(None)
         }
     }
 }
 
-fn find_and_remove_server(env: &Env, root_uri: &str, file_type: &str) -> Result<Option<LspServer>> {
-    let mut projects = projects().lock().unwrap();
-    match projects.get_mut(root_uri) {
+fn with_server<F, T>(caller: &str, env: &Env, root_uri: &str, file_type: &str, f: F) -> Result<Option<T>>
+where
+    F: FnOnce(&mut LspServer) -> Result<Option<T>>,
+{
+    with_project(caller, env, root_uri, |project| match project.servers.get_mut(file_type) {
+        Some(server) => {
+            if server.status != SERVER_STATUS_RUNNING {
+                env.lspce_message("Server is not ready");
+                return Ok(None);
+            }
+            f(server)
+        }
         None => {
-            env.lspce_message(&format!("No project found for '{}'", root_uri));
+            env.lspce_message(&format!("No server for {}. @{}", file_type, caller));
             Ok(None)
         }
-        Some(project) => match project.servers.remove(file_type) {
-            None => {
-                env.lspce_message(&format!("No {} server found in project '{}'", file_type, root_uri));
-                Ok(None)
-            }
-            Some(server) => Ok(Some(server)),
-        },
-    }
+    })
+}
+
+fn find_and_remove_server(env: &Env, root_uri: &str, file_type: &str) -> Result<Option<LspServer>> {
+    with_project("find_and_remove_server", env, root_uri, |project| {
+        let server = project.servers.remove(file_type);
+        if server.is_none() {
+            env.lspce_message(&format!("No {} server found in project '{}'", file_type, root_uri));
+        }
+        Ok(server)
+    })
 }
 
 /// Connect to an existing server or create a server subprocess and then connect to it.
@@ -745,14 +745,9 @@ fn shutdown(env: &Env, root_uri: String, file_type: String, request: String) -> 
 
 #[defun]
 fn server(env: &Env, root_uri: String, file_type: String) -> Result<Option<String>> {
-    let projects = projects().lock().unwrap();
-
-    if let Some(p) = projects.get(&root_uri) {
-        if let Some(s) = p.servers.get(&file_type) {
-            return Ok(Some(serde_json::to_string(&s.server_info).unwrap()));
-        }
-    }
-    Ok(None)
+    with_project("server", env, &root_uri, |project| {
+        Ok(project.servers.get(&file_type).map(|s| serde_json::to_string(&s.server_info).unwrap()))
+    })
 }
 
 fn _request_async(server: &mut LspServer, req: Request) -> bool {
