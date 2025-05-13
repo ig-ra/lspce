@@ -1,3 +1,4 @@
+use once_cell::sync::Lazy;
 use std::{
     fmt,
     fs::File,
@@ -38,12 +39,7 @@ pub struct Logger {}
 impl Logger {
     fn log(buf: &str) {
         let mut logger = logger().lock().unwrap();
-        logger.write_all(
-            Local::now()
-                .format("%Y-%m-%d %H:%M:%S%.3f - ")
-                .to_string()
-                .as_bytes(),
-        );
+        logger.write_all(Local::now().format("%Y-%m-%d %H:%M:%S%.3f - ").to_string().as_bytes());
         logger.write_all(buf.as_bytes());
         logger.write_all("\n".as_bytes());
     }
@@ -84,22 +80,19 @@ impl Write for FakeFile {
     }
 }
 
-fn logger() -> &'static Arc<Mutex<dyn Write>> {
-    static mut LOGGER: MaybeUninit<Arc<Mutex<dyn Write>>> = MaybeUninit::uninit();
-    static ONCE: Once = Once::new();
-
-    ONCE.call_once(|| unsafe {
-        let file_name = log_file_name();
-        if !file_name.is_empty() {
-            if let Ok(f) = File::options().create(true).append(true).open(file_name) {
-                LOGGER.as_mut_ptr().write(Arc::new(Mutex::new(f)))
-            } else {
-                LOGGER.as_mut_ptr().write(Arc::new(Mutex::new(FakeFile {})))
-            }
+static LOGGER: Lazy<Arc<Mutex<dyn Write + Send>>> = Lazy::new(|| {
+    let file_name = log_file_name();
+    if !file_name.is_empty() {
+        if let Ok(f) = File::options().create(true).append(true).open(file_name) {
+            Arc::new(Mutex::new(f))
         } else {
-            LOGGER.as_mut_ptr().write(Arc::new(Mutex::new(FakeFile {})))
+            Arc::new(Mutex::new(FakeFile {}))
         }
-    });
+    } else {
+        Arc::new(Mutex::new(FakeFile {}))
+    }
+});
 
-    unsafe { &*LOGGER.as_mut_ptr() }
+fn logger() -> &'static Arc<Mutex<dyn Write + Send>> {
+    &LOGGER
 }

@@ -31,10 +31,12 @@ use msg::Notification;
 use msg::Request;
 use msg::RequestId;
 use msg::Response;
+use once_cell::sync::Lazy;
 use serde::de::DeserializeOwned;
 use serde::Deserialize;
 use serde::Serialize;
 use serde_json::json;
+
 use std::error::Error;
 use std::fmt::{self, Display, Formatter};
 use std::fs::File;
@@ -453,6 +455,11 @@ impl Project {
         Project { root_uri, servers: HashMap::new() }
     }
 }
+static PROJECTS: Lazy<Arc<Mutex<HashMap<String, Project>>>> = Lazy::new(|| Arc::new(Mutex::new(HashMap::new())));
+
+fn projects() -> &'static Arc<Mutex<HashMap<String, Project>>> {
+    &PROJECTS
+}
 
 // Emacs won't load the module without this.
 emacs::plugin_is_GPL_compatible!();
@@ -516,15 +523,6 @@ fn get_log_level(env: &Env) -> Result<u8> {
 fn set_log_file(env: &Env, file: String) -> Result<Value<'_>> {
     *LOG_FILE_NAME.lock().unwrap() = file.clone();
     env.lspce_message(format!("Set logging file to {}", file))
-}
-
-fn projects() -> &'static Arc<Mutex<HashMap<String, Project>>> {
-    static mut PROJECTS: MaybeUninit<Arc<Mutex<HashMap<String, Project>>>> = MaybeUninit::uninit();
-    static ONCE: Once = Once::new();
-
-    ONCE.call_once(|| unsafe { PROJECTS.as_mut_ptr().write(Arc::new(Mutex::new(HashMap::new()))) });
-
-    unsafe { &*PROJECTS.as_mut_ptr() }
 }
 
 #[track_caller]
