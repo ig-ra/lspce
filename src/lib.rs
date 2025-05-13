@@ -39,6 +39,7 @@ use std::error::Error;
 use std::fmt::{self, Display, Formatter};
 use std::fs::File;
 use std::io::Result as IoResult;
+use std::panic::Location;
 use std::result::Result as RustResult;
 use std::str::Utf8Error;
 
@@ -526,11 +527,13 @@ fn projects() -> &'static Arc<Mutex<HashMap<String, Project>>> {
     unsafe { &*PROJECTS.as_mut_ptr() }
 }
 
-fn with_project<F, T>(caller: &str, env: &Env, root_uri: &str, f: F) -> Result<Option<T>>
+#[track_caller]
+fn with_project<F, T>(env: &Env, root_uri: &str, caller_loc: Option<&Location<'static>>, f: F) -> Result<Option<T>>
 where
     F: FnOnce(&mut Project) -> Result<Option<T>>,
 {
     let mut projects_guard = projects().lock().unwrap();
+    let caller = caller_loc.unwrap_or_else(|| Location::caller());
 
     match projects_guard.get_mut(root_uri) {
         Some(project) => f(project),
@@ -541,11 +544,13 @@ where
     }
 }
 
-fn with_server<F, T>(caller: &str, env: &Env, root_uri: &str, file_type: &str, f: F) -> Result<Option<T>>
+#[track_caller]
+fn with_server<F, T>(env: &Env, root_uri: &str, file_type: &str, f: F) -> Result<Option<T>>
 where
     F: FnOnce(&mut LspServer) -> Result<Option<T>>,
 {
-    with_project(caller, env, root_uri, |project| match project.servers.get_mut(file_type) {
+    let caller = Location::caller();
+    with_project(env, root_uri, Some(&caller), |project| match project.servers.get_mut(file_type) {
         Some(server) => {
             if server.status != SERVER_STATUS_RUNNING {
                 env.lspce_message("Server is not ready");
@@ -554,14 +559,14 @@ where
             f(server)
         }
         None => {
-            env.lspce_message(&format!("No server for {}. @{}", file_type, caller));
+            env.lspce_message(&format!("No server for {}. @{}", file_type, Location::caller()));
             Ok(None)
         }
     })
 }
 
 fn find_and_remove_server(env: &Env, root_uri: &str, file_type: &str) -> Result<Option<LspServer>> {
-    with_project("find_and_remove_server", env, root_uri, |project| {
+    with_project(env, root_uri, None, |project| {
         let server = project.servers.remove(file_type);
         if server.is_none() {
             env.lspce_message(&format!("No {} server found in project '{}'", file_type, root_uri));
@@ -755,7 +760,7 @@ fn shutdown(env: &Env, root_uri: String, file_type: String, request: String) -> 
 
 #[defun]
 fn server(env: &Env, root_uri: String, file_type: String) -> Result<Option<String>> {
-    with_project("server", env, &root_uri, |project| {
+    with_project(env, &root_uri, None, |project| {
         Ok(project.servers.get(&file_type).map(|s| serde_json::to_string(&s.server_info).unwrap()))
     })
 }
@@ -789,7 +794,7 @@ fn _request_async(server: &mut LspServer, req: Request) -> bool {
 
 #[defun]
 fn request_async(env: &Env, root_uri: String, file_type: String, req: String) -> Result<Option<bool>> {
-    with_server("request", env, &root_uri, &file_type, |server| {
+    with_server(env, &root_uri, &file_type, |server| {
         Logger::trace(&format!("request {}", &req));
         let msg = unwrap_or_return!(parse_json::<Request>(&req), Ok(None));
         Ok(_request_async(server, msg).then_some(true))
@@ -808,7 +813,7 @@ fn _notify(server: &mut LspServer, req: Notification) -> Result<Option<bool>> {
 
 #[defun]
 fn notify(env: &Env, root_uri: String, file_type: String, req: String) -> Result<Option<bool>> {
-    with_server("notify", env, &root_uri, &file_type, |server| {
+    with_server(env, &root_uri, &file_type, |server| {
         Logger::trace(&format!("notify {}", &req));
         let n = unwrap_or_return!(parse_json::<Notification>(&req), Ok(None));
         return _notify(server, n);
@@ -820,21 +825,19 @@ fn notify(env: &Env, root_uri: String, file_type: String, req: String) -> Result
 fn read_response_exact(
     env: &Env, root_uri: String, file_type: String, id: String, method: String,
 ) -> Result<Option<String>> {
-    with_server("read_response_exact", env, &root_uri, &file_type, |server| {
+    with_server(env, &root_uri, &file_type, |server| {
         Ok(server.read_response_exact(RequestId::from(id), method).map(|r| r.content))
     })
 }
 
 #[defun]
 fn read_notification(env: &Env, root_uri: String, file_type: String) -> Result<Option<String>> {
-    with_server("read_notification", env, &root_uri, &file_type, |server| {
-        Ok(server.read_notification().map(|r| r.content))
-    })
+    with_server(env, &root_uri, &file_type, |server| Ok(server.read_notification().map(|r| r.content)))
 }
 
 #[defun]
 fn read_file_diagnostics(env: &Env, root_uri: String, file_type: String, uri: String) -> Result<Option<String>> {
-    with_server("read_file_diagnostics", env, &root_uri, &file_type, |server| {
+    with_server(env, &root_uri, &file_type, |server| {
         let mut server_data = server.server_data.lock().unwrap();
         match server_data.file_infos.get(&uri) {
             Some(file_info) => match serde_json::to_string(&file_info.diagnostics) {
@@ -851,14 +854,10 @@ fn read_file_diagnostics(env: &Env, root_uri: String, file_type: String, uri: St
 
 #[defun]
 fn read_latest_response_id(env: &Env, root_uri: String, file_type: String) -> Result<Option<String>> {
-    with_server("read_latest_response_id", env, &root_uri, &file_type, |server| {
-        Ok(Some(server.get_latest_response_id().to_string()))
-    })
+    with_server(env, &root_uri, &file_type, |server| Ok(Some(server.get_latest_response_id().to_string())))
 }
 
 #[defun]
 fn read_latest_response_tick(env: &Env, root_uri: String, file_type: String) -> Result<Option<String>> {
-    with_server("read_latest_response_tick", env, &root_uri, &file_type, |server| {
-        Ok(Some(server.get_latest_response_tick()))
-    })
+    with_server(env, &root_uri, &file_type, |server| Ok(Some(server.get_latest_response_tick())))
 }
