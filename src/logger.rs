@@ -43,29 +43,25 @@ impl Logger {
         logger.write_all(buf.as_bytes());
         logger.write_all("\n".as_bytes());
     }
-    pub fn error(buf: &str) {
-        let log_level = LOG_LEVEL.load(Ordering::Relaxed);
-        if log_level >= LOG_ERROR {
+
+    fn log_if_enabled(level: u8, buf: &str) {
+        let cur_level = LOG_LEVEL.load(Ordering::Relaxed);
+        if cur_level >= level {
             Logger::log(buf);
         }
+    }
+
+    pub fn error(buf: &str) {
+        Logger::log_if_enabled(LOG_ERROR, buf);
     }
     pub fn info(buf: &str) {
-        let log_level = LOG_LEVEL.load(Ordering::Relaxed);
-        if log_level >= LOG_INFO {
-            Logger::log(buf);
-        }
+        Logger::log_if_enabled(LOG_INFO, buf);
     }
     pub fn trace(buf: &str) {
-        let log_level = LOG_LEVEL.load(Ordering::Relaxed);
-        if log_level >= LOG_TRACE {
-            Logger::log(buf);
-        }
+        Logger::log_if_enabled(LOG_TRACE, buf);
     }
     pub fn debug(buf: &str) {
-        let log_level = LOG_LEVEL.load(Ordering::Relaxed);
-        if log_level >= LOG_DEBUG {
-            Logger::log(buf);
-        }
+        Logger::log_if_enabled(LOG_DEBUG, buf);
     }
 }
 
@@ -84,13 +80,10 @@ static LOGGER: Lazy<Arc<Mutex<dyn Write + Send>>> = Lazy::new(|| {
     let file_name = log_file_name();
     if !file_name.is_empty() {
         if let Ok(f) = File::options().create(true).append(true).open(file_name) {
-            Arc::new(Mutex::new(f))
-        } else {
-            Arc::new(Mutex::new(FakeFile {}))
+            return Arc::new(Mutex::new(f));
         }
-    } else {
-        Arc::new(Mutex::new(FakeFile {}))
     }
+    Arc::new(Mutex::new(FakeFile {}))
 });
 
 fn logger() -> &'static Arc<Mutex<dyn Write + Send>> {
