@@ -31,6 +31,7 @@ use msg::Notification;
 use msg::Request;
 use msg::RequestId;
 use msg::Response;
+use serde::de::DeserializeOwned;
 use serde::Deserialize;
 use serde::Serialize;
 use serde_json::json;
@@ -152,9 +153,9 @@ impl LspServer {
 
         let mut child;
         if !emacs_envs.is_empty() {
-            let envs = serde_json::from_str::<HashMap<String, String>>(&emacs_envs);
+            let envs = parse_json::<HashMap<String, String>>(&emacs_envs);
             match envs {
-                Ok(envs) => {
+                Some(envs) => {
                     child = Command::new(cmd)
                         .args(args)
                         .stdin(Stdio::piped())
@@ -163,8 +164,7 @@ impl LspServer {
                         .envs(envs)
                         .spawn();
                 }
-                Err(e) => {
-                    Logger::error(&format!("deserializing emacs_envs failed with error {:?}", e));
+                None => {
                     return None;
                 }
             }
@@ -629,16 +629,27 @@ fn connect(
     }
 }
 
+fn parse_json<T>(json_str: &str) -> Option<T>
+where
+    T: DeserializeOwned,
+{
+    match serde_json::from_str::<T>(json_str) {
+        Ok(value) => Some(value),
+        Err(e) => {
+            let type_name = std::any::type_name::<T>();
+            Logger::error(&format!("Failed to parse JSON as {}: {}", type_name, e));
+            None
+        }
+    }
+}
+
 fn initialize(env: &Env, root_uri: String, server: &mut LspServer, req_str: String, timeout: i32) -> bool {
     Logger::debug(&format!("raw initialize request {:#?}", req_str));
 
-    let msg = serde_json::from_str::<Request>(&req_str);
-    if msg.is_err() {
-        Logger::error(&format!("request is not valid json {}", &req_str));
-        return false;
-    }
-
-    let msg = msg.unwrap();
+    let msg = match parse_json::<Request>(&req_str) {
+        Some(msg) => msg,
+        None => return false,
+    };
     let id = msg.id.clone();
 
     Logger::info(&format!("initialize request {}", serde_json::to_string_pretty(&msg).unwrap()));
@@ -731,10 +742,9 @@ fn shutdown(env: &Env, root_uri: String, file_type: String, request: String) -> 
         None => return Ok(None),
     };
 
-    let req = match serde_json::from_str::<Request>(&request) {
-        Ok(req) => req,
-        Err(e) => {
-            Logger::error(&format!("request is not valid json {}: {}", &request, e));
+    let req = match parse_json::<Request>(&request) {
+        Some(req) => req,
+        None => {
             return Ok(Some(false));
         }
     };
@@ -782,10 +792,9 @@ fn request_async(env: &Env, root_uri: String, file_type: String, req: String) ->
     with_server("request", env, &root_uri, &file_type, |server| {
         Logger::trace(&format!("request {}", &req));
 
-        let msg = match serde_json::from_str::<Request>(&req) {
-            Ok(m) => m,
-            Err(e) => {
-                Logger::error(&format!("request is not valid json {}: {}", &req, e));
+        let msg = match parse_json::<Request>(&req) {
+            Some(m) => m,
+            None => {
                 return Ok(None);
             }
         };
@@ -809,12 +818,9 @@ fn notify(env: &Env, root_uri: String, file_type: String, req: String) -> Result
     with_server("notify", env, &root_uri, &file_type, |server| {
         Logger::trace(&format!("notify {}", &req));
 
-        match serde_json::from_str::<Notification>(&req) {
-            Ok(n) => _notify(server, n),
-            Err(e) => {
-                Logger::error(&format!("notification is not a valid json {}: {}", &req, e));
-                Ok(None)
-            }
+        match parse_json::<Notification>(&req) {
+            Some(n) => _notify(server, n),
+            None => Ok(None),
         }
     })
 }
