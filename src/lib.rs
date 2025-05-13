@@ -629,6 +629,15 @@ fn connect(
     }
 }
 
+macro_rules! unwrap_or_return {
+    ($expr:expr, $ret:expr) => {
+        match $expr {
+            Some(val) => val,
+            None => return $ret,
+        }
+    };
+}
+
 fn parse_json<T>(json_str: &str) -> Option<T>
 where
     T: DeserializeOwned,
@@ -646,10 +655,7 @@ where
 fn initialize(env: &Env, root_uri: String, server: &mut LspServer, req_str: String, timeout: i32) -> bool {
     Logger::debug(&format!("raw initialize request {:#?}", req_str));
 
-    let msg = match parse_json::<Request>(&req_str) {
-        Some(msg) => msg,
-        None => return false,
-    };
+    let msg = unwrap_or_return!(parse_json::<Request>(&req_str), false);
     let id = msg.id.clone();
 
     Logger::info(&format!("initialize request {}", serde_json::to_string_pretty(&msg).unwrap()));
@@ -742,13 +748,7 @@ fn shutdown(env: &Env, root_uri: String, file_type: String, request: String) -> 
         None => return Ok(None),
     };
 
-    let req = match parse_json::<Request>(&request) {
-        Some(req) => req,
-        None => {
-            return Ok(Some(false));
-        }
-    };
-
+    let req = unwrap_or_return!(parse_json::<Request>(&request), Ok(Some(false)));
     thread::spawn(move || shutdown_server(server, req));
     Ok(Some(true))
 }
@@ -791,14 +791,7 @@ fn _request_async(server: &mut LspServer, req: Request) -> bool {
 fn request_async(env: &Env, root_uri: String, file_type: String, req: String) -> Result<Option<bool>> {
     with_server("request", env, &root_uri, &file_type, |server| {
         Logger::trace(&format!("request {}", &req));
-
-        let msg = match parse_json::<Request>(&req) {
-            Some(m) => m,
-            None => {
-                return Ok(None);
-            }
-        };
-
+        let msg = unwrap_or_return!(parse_json::<Request>(&req), Ok(None));
         Ok(_request_async(server, msg).then_some(true))
     })
 }
@@ -817,11 +810,8 @@ fn _notify(server: &mut LspServer, req: Notification) -> Result<Option<bool>> {
 fn notify(env: &Env, root_uri: String, file_type: String, req: String) -> Result<Option<bool>> {
     with_server("notify", env, &root_uri, &file_type, |server| {
         Logger::trace(&format!("notify {}", &req));
-
-        match parse_json::<Notification>(&req) {
-            Some(n) => _notify(server, n),
-            None => Ok(None),
-        }
+        let n = unwrap_or_return!(parse_json::<Notification>(&req), Ok(None));
+        return _notify(server, n);
     })
 }
 
