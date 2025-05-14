@@ -7,46 +7,24 @@ mod msg;
 mod socket;
 mod stdio;
 
-use bytes::Buf;
-use bytes::BytesMut;
-use chrono::Local;
 use connection::Connection;
-use crossbeam_channel::SendError;
 use emacs::{defun, Env, IntoLisp, Result, Value};
 use error::LspceError;
-use logger::Logger;
-use logger::LOG_DEBUG;
-use logger::LOG_DISABLED;
-use logger::LOG_FILE_NAME;
-use logger::LOG_LEVEL;
+use logger::{Logger, LOG_DEBUG, LOG_DISABLED, LOG_FILE_NAME, LOG_LEVEL};
 
-use lsp_types::Diagnostic;
-use lsp_types::DidChangeTextDocumentParams;
-use lsp_types::InitializeParams;
-use lsp_types::InitializeResult;
-use lsp_types::InitializedParams;
-use lsp_types::PublishDiagnosticsParams;
-use msg::Message;
-use msg::Notification;
-use msg::Request;
-use msg::RequestId;
-use msg::Response;
+use lsp_types::{
+    Diagnostic, DidChangeTextDocumentParams, InitializeResult, InitializedParams, PublishDiagnosticsParams,
+};
+use msg::{Message, Notification, Request, RequestId, Response};
 use once_cell::sync::Lazy;
 use serde::de::DeserializeOwned;
-use serde::Deserialize;
-use serde::Serialize;
+use serde::{Deserialize, Serialize};
 use serde_json::json;
 
-use std::error::Error;
-use std::fmt::{self, Display, Formatter};
-use std::fs::File;
-use std::io::Result as IoResult;
 use std::panic::Location;
 use std::result::Result as RustResult;
-use std::str::Utf8Error;
 
 use std::sync::atomic::AtomicI32;
-use std::sync::atomic::AtomicU32;
 use std::sync::atomic::AtomicU8;
 use std::sync::atomic::Ordering;
 use std::time::Instant;
@@ -54,11 +32,10 @@ use stdio::IoThreads;
 
 use std::{
     collections::{HashMap, VecDeque},
-    fmt::{format, Debug},
+    fmt::Debug,
     io::{Read, Write},
-    mem::MaybeUninit,
-    process::{Child, ChildStdin, ChildStdout, Command, Stdio},
-    sync::{Arc, Mutex, Once},
+    process::{Child, Command, Stdio},
+    sync::{Arc, Mutex},
     thread::{self, JoinHandle, Thread},
 };
 

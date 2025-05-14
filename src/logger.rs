@@ -1,13 +1,10 @@
 use once_cell::sync::Lazy;
 use std::{
-    fmt,
     fs::File,
-    io::{self, BufRead, Error, Read, Write},
-    mem::MaybeUninit,
-    path::Path,
+    io::{Error, Write},
     sync::{
         atomic::{AtomicU8, Ordering},
-        Arc, Mutex, Once,
+        Arc, Mutex,
     },
 };
 

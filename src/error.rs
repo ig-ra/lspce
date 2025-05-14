@@ -1,9 +1,5 @@
 use std::error::Error;
 use std::fmt::{self, Display, Formatter};
-use std::io::Error as IoError;
-use std::num::ParseIntError;
-use std::result::Result as RustResult;
-use std::str::Utf8Error;
 
 use crate::msg::{Notification, Request};
 
@@ -33,10 +29,7 @@ pub enum ExtractError<T> {
     /// The extracted message was of a different method than expected.
     MethodMismatch(T),
     /// Failed to deserialize the message.
-    JsonError {
-        method: String,
-        error: serde_json::Error,
-    },
+    JsonError { method: String, error: serde_json::Error },
 }
 
 impl std::error::Error for ExtractError<Request> {}
