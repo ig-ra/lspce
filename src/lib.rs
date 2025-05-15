@@ -124,14 +124,14 @@ struct LspServer {
 }
 
 impl LspServer {
-    pub fn new(cmd: String, cmd_args: String, emacs_envs: String) -> Option<LspServer> {
+    pub fn new(cmd: &str, cmd_args: &str, emacs_envs: &str) -> Option<LspServer> {
         let args = cmd_args.split_ascii_whitespace().collect::<Vec<&str>>();
 
-        Logger::info(&format!("emacs_envs: {}", &emacs_envs));
+        Logger::info(&format!("emacs_envs: {}", emacs_envs));
 
         let mut child;
         if !emacs_envs.is_empty() {
-            let envs = parse_json::<HashMap<String, String>>(&emacs_envs);
+            let envs = parse_json::<HashMap<String, String>>(emacs_envs);
             match envs {
                 Some(envs) => {
                     child = Command::new(cmd)
@@ -566,7 +566,7 @@ fn connect(
         }
     }
 
-    let mut server = LspServer::new(cmd.clone(), cmd_args.clone(), emacs_envs.clone());
+    let mut server = LspServer::new(&cmd, &cmd_args, &emacs_envs);
     if let Some(mut s) = server {
         let server_info: LspServerInfo;
 
@@ -595,11 +595,8 @@ fn connect(
         Ok(Some(serde_json::to_string(&server_info).unwrap()))
     } else {
         Logger::error(&format!(
-            "Failed to connect to server {}, {} for project {} {}.",
-            cmd.clone(),
-            cmd_args.clone(),
-            root_uri.clone(),
-            lsp_type.clone()
+            "Failed to connect to server <{} {}> for project {} {}.",
+            cmd, cmd_args, root_uri, lsp_type
         ));
         Ok(None)
     }
