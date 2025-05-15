@@ -124,9 +124,7 @@ struct LspServer {
 }
 
 impl LspServer {
-    pub fn new(
-        root_uri: String, cmd: String, cmd_args: String, initialize_req: String, emacs_envs: String,
-    ) -> Option<LspServer> {
+    pub fn new(cmd: String, cmd_args: String, initialize_req: String, emacs_envs: String) -> Option<LspServer> {
         let args = cmd_args.split_ascii_whitespace().collect::<Vec<&str>>();
 
         Logger::info(&format!("emacs_envs: {}", &emacs_envs));
@@ -568,14 +566,13 @@ fn connect(
         }
     }
 
-    let mut server =
-        LspServer::new(root_uri.clone(), cmd.clone(), cmd_args.clone(), initialize_req.clone(), emacs_envs.clone());
+    let mut server = LspServer::new(cmd.clone(), cmd_args.clone(), initialize_req.clone(), emacs_envs.clone());
     if let Some(mut s) = server {
         let server_info: LspServerInfo;
 
         let mut project = projects.get_mut(&root_uri);
         if let Some(p) = project.as_mut() {
-            if initialize(env, root_uri.clone(), &mut s, initialize_req, timeout) {
+            if initialize(env, &mut s, initialize_req, timeout) {
                 server_info = s.server_info.clone();
                 p.servers.insert(lsp_type, s);
             } else {
@@ -584,10 +581,9 @@ fn connect(
             }
         } else {
             let mut proj = Project::new(root_uri.clone());
-            if initialize(env, root_uri.clone(), &mut s, initialize_req, timeout) {
+            if initialize(env, &mut s, initialize_req, timeout) {
                 server_info = s.server_info.clone();
                 proj.servers.insert(lsp_type, s);
-
                 projects.insert(root_uri.clone(), proj);
             } else {
                 s.kill_child();
@@ -632,7 +628,7 @@ where
     }
 }
 
-fn initialize(env: &Env, root_uri: String, server: &mut LspServer, req_str: String, timeout: i32) -> bool {
+fn initialize(env: &Env, server: &mut LspServer, req_str: String, timeout: i32) -> bool {
     Logger::debug(&format!("raw initialize request {:#?}", req_str));
 
     let msg = unwrap_or_return!(parse_json::<Request>(&req_str), false);
