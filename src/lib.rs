@@ -62,13 +62,8 @@ struct LspServerInfo {
 }
 
 impl LspServerInfo {
-    pub fn new() -> LspServerInfo {
-        LspServerInfo {
-            name: "".to_string(),
-            version: "".to_string(),
-            id: "".to_string(),
-            capabilities: "".to_string(),
-        }
+    pub fn new(id: u32) -> LspServerInfo {
+        LspServerInfo { name: String::new(), version: String::new(), id: id.to_string(), capabilities: String::new() }
     }
 }
 
