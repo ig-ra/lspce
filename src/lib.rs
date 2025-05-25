@@ -7,6 +7,9 @@ mod msg;
 mod socket;
 mod stdio;
 
+#[cfg(test)]
+mod tests;
+
 use connection::Connection;
 use emacs::{defun, Env, IntoLisp, Result, Value};
 use error::LspceError;
