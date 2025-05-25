@@ -142,67 +142,48 @@ struct LspServer {
 }
 
 impl LspServer {
-    pub fn new(cmd: &str, cmd_args: &str, emacs_envs: &str) -> Option<LspServer> {
+    pub fn new(cmd: &str, cmd_args: &str, emacs_envs: &str) -> RustResult<LspServer, LspceError> {
         let args = cmd_args.split_ascii_whitespace().collect::<Vec<&str>>();
 
-        Logger::info(&format!("emacs_envs: {}", emacs_envs));
+        let mut command = Command::new(cmd);
+        command.args(args);
+        Logger::info(&format!("Creating new LSP server: <{} {}>", cmd, cmd_args));
 
-        let mut child;
         if !emacs_envs.is_empty() {
-            let envs = parse_json::<HashMap<String, String>>(emacs_envs);
-            match envs {
-                Some(envs) => {
-                    child = Command::new(cmd)
-                        .args(args)
-                        .stdin(Stdio::piped())
-                        .stdout(Stdio::piped())
-                        .stderr(Stdio::piped())
-                        .envs(envs)
-                        .spawn();
-                }
-                None => {
-                    return None;
-                }
-            }
-        } else {
-            child = Command::new(cmd)
-                .args(args)
-                .stdin(Stdio::piped())
-                .stdout(Stdio::piped())
-                .stderr(Stdio::piped())
-                .spawn();
+            Logger::info(&format!("emacs_envs: {}", emacs_envs));
+
+            let envs: HashMap<String, String> = serde_json::from_str(emacs_envs)
+                .map_err(|e| LspceError(format!("Failed to parse emacs_envs JSON: {}", e)))?;
+            command.envs(envs);
         }
+        command.stdin(Stdio::piped()).stdout(Stdio::piped()).stderr(Stdio::piped());
 
-        if let Ok(mut c) = child {
-            let mut stdin = c.stdin.take().unwrap();
-            let mut stdout = c.stdout.take().unwrap();
-            let mut stderr = c.stderr.take().unwrap();
+        let mut child =
+            command.spawn().map_err(|err| LspceError(format!("Failed to spawn LSP server process: {:?}", err)))?;
 
-            let (mut transport, mut transport_threads) = Connection::stdio(stdin, stdout, stderr);
+        let stdin = child.stdin.take().ok_or_else(|| LspceError("Failed obtain LSP server stdin".into()))?;
+        let stdout = child.stdout.take().ok_or_else(|| LspceError("Failed obtain get LSP server stdout".into()))?;
+        let stderr = child.stderr.take().ok_or_else(|| LspceError("Failed obtain LSP server stderr".into()))?;
 
-            let mut server_info = LspServerInfo::new();
-            server_info.id = c.id().to_string();
-            let mut server = LspServer {
-                child: Some(c),
-                server_info,
-                status: SERVER_STATUS_STARTING,
-                transport: Arc::new(Mutex::new(Some(transport))),
-                transport_threads: Some(transport_threads),
-                dispatcher: None,
-                server_data: Arc::new(Mutex::new(LspServerData::new())),
-                exit: Arc::new(Mutex::new(false)),
-            };
-            server.dispatcher = Some(LspServer::start_dispatcher(
-                Arc::clone(&server.transport),
-                Arc::clone(&server.exit),
-                Arc::clone(&server.server_data),
-            ));
+        let (mut transport, mut transport_threads) = Connection::stdio(stdin, stdout, stderr);
+        let server_info = LspServerInfo::new(child.id());
+        let mut server = LspServer {
+            child: Some(child),
+            server_info: server_info,
+            status: SERVER_STATUS_STARTING,
+            transport: Arc::new(Mutex::new(Some(transport))),
+            transport_threads: Some(transport_threads),
+            dispatcher: None,
+            server_data: Arc::new(Mutex::new(LspServerData::new())),
+            exit: Arc::new(Mutex::new(false)),
+        };
 
-            Some(server)
-        } else {
-            Logger::error(&format!("create child process failed with error {:?}", child.err().unwrap(),));
-            None
-        }
+        server.dispatcher = Some(LspServer::start_dispatcher(
+            Arc::clone(&server.transport),
+            Arc::clone(&server.exit),
+            Arc::clone(&server.server_data),
+        ));
+        Ok(server)
     }
 
     fn start_dispatcher(
@@ -583,14 +564,12 @@ fn connect(
         }
     }
 
-
-
     let mut server = match LspServer::new(&cmd, &cmd_args, &emacs_envs) {
-        Some(s) => s,
-        None => {
+        Ok(s) => s,
+        Err(err) => {
             Logger::error(&format!(
-                "Failed to create server <{} {}> for project {} {}",
-                cmd, cmd_args, root_uri, lsp_type
+                "Failed to create server <{} {}> for project {} {}: {:#?}",
+                cmd, cmd_args, root_uri, lsp_type, err
             ));
             return Ok(None);
         }
