@@ -572,52 +572,41 @@ fn connect(
     env: &Env, root_uri: String, lsp_type: String, cmd: String, cmd_args: String, initialize_req: String, timeout: i32,
     emacs_envs: String,
 ) -> Result<Option<String>> {
-    Logger::info(&format!("start initializing server for lsp_type {} in project {}", lsp_type, root_uri));
+    Logger::info(&format!("initializing server for lsp_type {} in project {}", lsp_type, root_uri));
 
     let mut projects = projects().lock().unwrap();
 
     if let Some(p) = projects.get(&root_uri) {
         if let Some(s) = p.servers.get(&lsp_type) {
             Logger::info(&format!("server created already for lsp_type {} in project {}", lsp_type, root_uri));
-
             return Ok(Some(serde_json::to_string(&s.server_info).unwrap()));
         }
     }
 
-    let mut server = LspServer::new(&cmd, &cmd_args, &emacs_envs);
-    if let Some(mut s) = server {
-        let server_info: LspServerInfo;
 
-        let mut project = projects.get_mut(&root_uri);
-        if let Some(p) = project.as_mut() {
-            if initialize(env, &mut s, initialize_req, timeout) {
-                server_info = s.server_info.clone();
-                p.servers.insert(lsp_type, s);
-            } else {
-                s.kill_child();
-                return Ok(None);
-            }
-        } else {
-            let mut proj = Project::new(root_uri.clone());
-            if initialize(env, &mut s, initialize_req, timeout) {
-                server_info = s.server_info.clone();
-                proj.servers.insert(lsp_type, s);
-                projects.insert(root_uri.clone(), proj);
-            } else {
-                s.kill_child();
-                return Ok(None);
-            }
+
+    let mut server = match LspServer::new(&cmd, &cmd_args, &emacs_envs) {
+        Some(s) => s,
+        None => {
+            Logger::error(&format!(
+                "Failed to create server <{} {}> for project {} {}",
+                cmd, cmd_args, root_uri, lsp_type
+            ));
+            return Ok(None);
         }
+    };
 
-        Logger::info(&format!("Connected to server successfully. server capabilities {}", &server_info.capabilities));
-        Ok(Some(serde_json::to_string(&server_info).unwrap()))
-    } else {
-        Logger::error(&format!(
-            "Failed to connect to server <{} {}> for project {} {}.",
-            cmd, cmd_args, root_uri, lsp_type
-        ));
-        Ok(None)
+    if !initialize(env, &mut server, initialize_req, timeout) {
+        server.kill_child();
+        return Ok(None);
     }
+    let server_info = server.server_info.clone();
+
+    let project = projects.entry(root_uri.clone()).or_insert_with(|| Project::new(root_uri.clone()));
+    project.servers.insert(lsp_type, server);
+
+    Logger::info(&format!("Connected to server successfully. server capabilities {}", &server_info.capabilities));
+    Ok(Some(serde_json::to_string(&server_info).unwrap()))
 }
 
 fn initialize(env: &Env, server: &mut LspServer, req_str: String, timeout: i32) -> bool {
