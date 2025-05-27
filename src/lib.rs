@@ -749,21 +749,23 @@ fn shutdown_impl(env: &Env, root_uri: String, file_type: String, request: String
 
 #[defun]
 fn server(env: &Env, root_uri: String, file_type: String) -> Result<Option<String>> {
-    with_project(env, &root_uri, None, |project| {
-        Ok(project.servers.get(&file_type).map(|s| serde_json::to_string(&s.server_info).unwrap()))
+    safe_call(|| server_impl(env, root_uri, file_type))
+}
+
+fn server_impl(env: &Env, root_uri: String, file_type: String) -> Result<String> {
+    with_project2(env, &root_uri, None, |project| match project.servers.get(&file_type) {
+        Some(server) => serde_json::to_string(&server.server_info).context("failed to serialize server info"),
+        None => {
+            env.lspce_message(&format!("No {} server found in project '{}'", file_type, root_uri));
+            bail!("No {} server found in project '{}'", file_type, root_uri)
+        }
     })
 }
 
-fn _request_async(server: &mut LspServer, req: Request) -> bool {
-    let request_tick = match &req.request_tick {
-        Some(tick) => tick.clone(),
-        None => {
-            Logger::error(&format!("no request_tick in req {:?}", &req));
-            return false;
-        }
-    };
+fn _request_async(server: &mut LspServer, req: Request) -> Result<()> {
+    let request_tick = req.request_tick.as_ref().context("no request_tick in request")?;
 
-    server.update_request_info(req.id.clone(), request_tick);
+    server.update_request_info(req.id.clone(), request_tick.clone());
 
     if req.method == "textDocument/didChange" || req.method == "textDocument/didClose" {
         let param = serde_json::from_value::<DidChangeTextDocumentParams>(req.params.clone());
