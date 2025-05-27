@@ -541,6 +541,47 @@ where
     })
 }
 
+#[track_caller]
+fn with_project2<F, T>(env: &Env, root_uri: &str, caller_loc: Option<&Location<'static>>, f: F) -> Result<T>
+where
+    F: FnOnce(&mut Project) -> Result<T>,
+{
+    let mut projects_guard = projects().lock().unwrap();
+    let caller = caller_loc.unwrap_or_else(|| Location::caller());
+
+    match projects_guard.get_mut(root_uri) {
+        Some(project) => f(project),
+        None => {
+            env.lspce_message(&format!("No project found for '{}'. @{}", root_uri, caller));
+            Logger::error(&format!("No project found for '{}'. @{}", root_uri, caller));
+            bail!("no project found for '{}'", root_uri)
+        }
+    }
+}
+
+#[track_caller]
+fn with_server2<F, T>(env: &Env, root_uri: &str, file_type: &str, f: F) -> Result<T>
+where
+    F: FnOnce(&mut LspServer) -> Result<T>,
+{
+    let caller = Location::caller();
+    with_project2(env, root_uri, Some(&caller), |project| match project.servers.get_mut(file_type) {
+        Some(server) => {
+            if server.status != SERVER_STATUS_RUNNING {
+                env.lspce_message("LSP server is not ready");
+                Logger::error(&format!("LSP server for {}({}) is not ready", root_uri, file_type));
+                bail!("LSP server for {}({}) is not ready", root_uri, file_type)
+            }
+            f(server)
+        }
+        None => {
+            env.lspce_message(&format!("No LSP server for {}", file_type));
+            Logger::error(&format!("No LSP server for {}. @{}", file_type, Location::caller()));
+            bail!("No LSP server for {}", file_type)
+        }
+    })
+}
+
 // wrap API calls to return OK(None) instead of Err
 #[track_caller]
 fn safe_call<T, F>(f: F) -> Result<Option<T>>
