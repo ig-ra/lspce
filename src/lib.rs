@@ -10,6 +10,7 @@ mod stdio;
 #[cfg(test)]
 mod tests;
 
+use anyhow::{anyhow, bail, Context};
 use connection::Connection;
 use emacs::{defun, Env, IntoLisp, Result, Value};
 use error::LspceError;
@@ -568,36 +569,30 @@ fn find_and_remove_server(env: &Env, root_uri: &str, file_type: &str) -> Result<
 }
 
 /// Connect to an existing server or create a server subprocess and then connect to it.
-#[defun]
-fn connect(
+fn connect_impl(
     env: &Env, root_uri: String, lsp_type: String, cmd: String, cmd_args: String, initialize_req: String, timeout: i32,
     emacs_envs: String,
-) -> Result<Option<String>> {
-    Logger::info(&format!("initializing server for lsp_type {} in project {}", lsp_type, root_uri));
+) -> Result<String> {
+    let prj_name_type = format!("{}({})", root_uri, lsp_type);
+    Logger::info(&format!("Creating and initializing LSP server for {}", &prj_name_type));
 
     let mut projects = projects().lock().unwrap();
 
     if let Some(p) = projects.get(&root_uri) {
         if let Some(s) = p.servers.get(&lsp_type) {
-            Logger::info(&format!("server created already for lsp_type {} in project {}", lsp_type, root_uri));
-            return Ok(Some(serde_json::to_string(&s.server_info).unwrap()));
+            Logger::info(&format!("Using existing LSP server {}", &prj_name_type));
+            return serde_json::to_string(&s.server_info).context("failed to serialize server info");
         }
     }
 
-    let mut server = match LspServer::new(&cmd, &cmd_args, &emacs_envs) {
-        Ok(s) => s,
-        Err(err) => {
-            Logger::error(&format!(
-                "Failed to create server <{} {}> for project {} {}: {:#?}",
-                cmd, cmd_args, root_uri, lsp_type, err
-            ));
-            return Ok(None);
-        }
-    };
+    let mut server = LspServer::new(&cmd, &cmd_args, &emacs_envs).map_err(|err| {
+        Logger::error(&format!("Failed to create LSP server for {}, <{}{}>: {:#?}", prj_name_type, cmd, cmd_args, err));
+        err
+    })?;
 
     if !initialize(env, &mut server, initialize_req, timeout) {
         server.kill_child();
-        return Ok(None);
+        anyhow::bail!("Failed to initialize LSP server for {}", prj_name_type);
     }
     let server_info = server.server_info.clone();
 
@@ -605,7 +600,15 @@ fn connect(
     project.servers.insert(lsp_type, server);
 
     Logger::info(&format!("Connected to server successfully. server capabilities {}", &server_info.capabilities));
-    Ok(Some(serde_json::to_string(&server_info).unwrap()))
+    Ok(serde_json::to_string(&server_info)?)
+}
+
+#[defun]
+fn connect(
+    env: &Env, root_uri: String, lsp_type: String, cmd: String, cmd_args: String, initialize_req: String, timeout: i32,
+    emacs_envs: String,
+) -> Result<Option<String>> {
+    safe_call(|| connect_impl(env, root_uri, lsp_type, cmd, cmd_args, initialize_req, timeout, emacs_envs))
 }
 
 fn initialize(env: &Env, server: &mut LspServer, req_str: String, timeout: i32) -> bool {
