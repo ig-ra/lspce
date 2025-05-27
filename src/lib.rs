@@ -528,13 +528,15 @@ where
     with_project(env, root_uri, Some(&caller), |project| match project.servers.get_mut(file_type) {
         Some(server) => {
             if server.status != SERVER_STATUS_RUNNING {
-                env.lspce_message("Server is not ready");
+                env.lspce_message("LSP server is not ready");
+                Logger::error(&format!("LSP server for {}({}) is not ready", root_uri, file_type));
                 return Ok(None);
             }
             f(server)
         }
         None => {
-            env.lspce_message(&format!("No server for {}. @{}", file_type, Location::caller()));
+            env.lspce_message(&format!("No LSP server for {}", file_type));
+            Logger::error(&format!("No LSP server for {}. @{}", file_type, Location::caller()));
             Ok(None)
         }
     })
