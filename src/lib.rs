@@ -648,7 +648,7 @@ fn initialize(env: &Env, server: &mut LspServer, req_str: String, timeout: i32) 
 
     Logger::info(&format!("initialize request {}", serde_json::to_string_pretty(&msg).unwrap()));
 
-    if !_request_async(server, msg) {
+    if _request_async(server, msg).is_err() {
         return false;
     }
 
@@ -702,7 +702,7 @@ fn shutdown_server(mut server: LspServer, req: Request) {
 
     let req_id = req.id.clone();
 
-    if !_request_async(&mut server, req) {
+    if _request_async(&mut server, req).is_err() {
         return;
     }
 
@@ -762,33 +762,28 @@ fn server_impl(env: &Env, root_uri: String, file_type: String) -> Result<String>
     })
 }
 
-fn _request_async(server: &mut LspServer, req: Request) -> Result<()> {
+fn _request_async(server: &mut LspServer, req: Request) -> Result<bool> {
     let request_tick = req.request_tick.as_ref().context("no request_tick in request")?;
-
     server.update_request_info(req.id.clone(), request_tick.clone());
 
     if req.method == "textDocument/didChange" || req.method == "textDocument/didClose" {
-        let param = serde_json::from_value::<DidChangeTextDocumentParams>(req.params.clone());
-        if let Ok(param) = param {
+        if let Ok(param) = serde_json::from_value::<DidChangeTextDocumentParams>(req.params.clone()) {
             server.clear_diagnostics(param.text_document.uri.as_ref());
         }
     }
-
-    match server.write(Message::Request(req)) {
-        Ok(_) => true,
-        Err(e) => {
-            Logger::error(&format!("request error {:#?}", e));
-            false
-        }
-    }
+    server.write(Message::Request(req)).context("request")
 }
 
 #[defun]
 fn request_async(env: &Env, root_uri: String, file_type: String, req: String) -> Result<Option<bool>> {
-    with_server(env, &root_uri, &file_type, |server| {
+    safe_call(|| request_async_impl(env, root_uri, file_type, req))
+}
+
+fn request_async_impl(env: &Env, root_uri: String, file_type: String, req: String) -> Result<bool> {
+    with_server2(env, &root_uri, &file_type, |server| {
         Logger::trace(&format!("request {}", &req));
-        let msg = unwrap_or_return!(parse_json::<Request>(&req), Ok(None));
-        Ok(_request_async(server, msg).then_some(true))
+        let msg = serde_json::from_str::<Request>(&req).context("Failed to parse request JSON")?;
+        _request_async(server, msg)
     })
 }
 
