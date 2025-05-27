@@ -146,7 +146,7 @@ struct LspServer {
 }
 
 impl LspServer {
-    pub fn new(cmd: &str, cmd_args: &str, emacs_envs: &str) -> RustResult<LspServer, LspceError> {
+    pub fn new(cmd: &str, cmd_args: &str, emacs_envs: &str) -> Result<LspServer> {
         let args = cmd_args.split_ascii_whitespace().collect::<Vec<&str>>();
 
         let mut command = Command::new(cmd);
@@ -156,21 +156,21 @@ impl LspServer {
         if !emacs_envs.is_empty() {
             Logger::info(&format!("emacs_envs: {}", emacs_envs));
 
-            let envs: HashMap<String, String> = serde_json::from_str(emacs_envs)
-                .map_err(|e| LspceError(format!("Failed to parse emacs_envs JSON: {}", e)))?;
+            let envs: HashMap<String, String> =
+                serde_json::from_str(emacs_envs).context("Failed to parse emacs_envs JSON")?;
             command.envs(envs);
         }
         command.stdin(Stdio::piped()).stdout(Stdio::piped()).stderr(Stdio::piped());
 
-        let mut child =
-            command.spawn().map_err(|err| LspceError(format!("Failed to spawn LSP server process: {:?}", err)))?;
+        let mut child = command.spawn().context("Failed to spawn LSP server process")?;
 
-        let stdin = child.stdin.take().ok_or_else(|| LspceError("Failed obtain LSP server stdin".into()))?;
-        let stdout = child.stdout.take().ok_or_else(|| LspceError("Failed obtain get LSP server stdout".into()))?;
-        let stderr = child.stderr.take().ok_or_else(|| LspceError("Failed obtain LSP server stderr".into()))?;
+        let stdin = child.stdin.take().context("Failed to obtain LSP server's stdin")?;
+        let stdout = child.stdout.take().context("Failed to obtain LSP server's stdout")?;
+        let stderr = child.stderr.take().context("Failed to obtain LSP server's stderr")?;
 
         let (mut transport, mut transport_threads) = Connection::stdio(stdin, stdout, stderr);
         let server_info = LspServerInfo::new(child.id());
+
         let mut server = LspServer {
             child: Some(child),
             server_info: server_info,
