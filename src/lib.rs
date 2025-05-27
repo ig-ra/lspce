@@ -542,6 +542,21 @@ where
     })
 }
 
+// wrap API calls to return OK(None) instead of Err
+#[track_caller]
+fn safe_call<T, F>(f: F) -> Result<Option<T>>
+where
+    F: FnOnce() -> Result<T>,
+{
+    match f() {
+        Ok(result) => Ok(Some(result)),
+        Err(e) => {
+            Logger::error(&format!("Error: @{}: {}", Location::caller(), e));
+            Ok(None)
+        }
+    }
+}
+
 fn find_and_remove_server(env: &Env, root_uri: &str, file_type: &str) -> Result<Option<LspServer>> {
     with_project(env, root_uri, None, |project| {
         let server = project.servers.remove(file_type);
