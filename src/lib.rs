@@ -678,8 +678,7 @@ fn initialize(env: &Env, server: &mut LspServer, req_str: String, timeout: i32) 
                         "initialized".to_string(),
                         serde_json::to_value(InitializedParams {}).unwrap(),
                     );
-
-                    _notify(server, initialized);
+                    let _ = server.write(Message::Notification(initialized));
 
                     server.status = SERVER_STATUS_RUNNING;
 
@@ -722,7 +721,7 @@ fn shutdown_server(mut server: LspServer, req: Request) {
         match server.read_response() {
             Some(resp) if resp.id.eq(&req_id) => {
                 let exit = Notification::new("exit".to_string(), json!({}));
-                _notify(&mut server, exit);
+                let _ = server.write(Message::Notification(exit));
                 server.shutdown(false); // Graceful
                 return;
             }
@@ -794,22 +793,14 @@ fn request_async(env: &Env, root_uri: String, file_type: String, req: String) ->
     })
 }
 
-fn _notify(server: &mut LspServer, req: Notification) -> Result<Option<bool>> {
-    match server.write(Message::Notification(req)) {
-        Ok(_) => Ok(Some(true)),
-        Err(e) => {
-            Logger::error(&format!("notify error {:#?}", e));
-            Ok(None)
-        }
-    }
-}
-
 #[defun]
 fn notify(env: &Env, root_uri: String, file_type: String, req: String) -> Result<Option<bool>> {
-    with_server(env, &root_uri, &file_type, |server| {
-        Logger::trace(&format!("notify {}", &req));
-        let n = unwrap_or_return!(parse_json::<Notification>(&req), Ok(None));
-        return _notify(server, n);
+    safe_call(|| {
+        with_server2(env, &root_uri, &file_type, |server| {
+            Logger::trace(&format!("notify {}", &req));
+            let n = serde_json::from_str(&req).context("failed to parse notification JSON")?;
+            server.write(Message::Notification(n)).context("notify")
+        })
     })
 }
 
