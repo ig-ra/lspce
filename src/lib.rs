@@ -330,16 +330,14 @@ impl LspServer {
         }
     }
 
-    pub fn write(&self, request: Message) -> RustResult<(), LspceError> {
+    pub fn write(&self, request: Message) -> Result<bool> {
         let transport = self.transport.lock().unwrap();
-        if transport.is_some() {
-            let result = transport.as_ref().unwrap().write(request);
-            match result {
-                Ok(_) => Ok(()),
-                Err(e) => Err(LspceError(e.to_string())),
+        match transport.as_ref() {
+            Some(t) => {
+                t.write(request).map_err(anyhow::Error::msg)?;
+                Ok(true)
             }
-        } else {
-            Err(LspceError("transport is not established.".to_string()))
+            None => bail!("transport is not established"),
         }
     }
 
