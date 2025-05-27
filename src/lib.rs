@@ -597,16 +597,6 @@ where
     }
 }
 
-fn find_and_remove_server(env: &Env, root_uri: &str, file_type: &str) -> Result<Option<LspServer>> {
-    with_project(env, root_uri, None, |project| {
-        let server = project.servers.remove(file_type);
-        if server.is_none() {
-            env.lspce_message(&format!("No {} server found in project '{}'", file_type, root_uri));
-        }
-        Ok(server)
-    })
-}
-
 /// Connect to an existing server or create a server subprocess and then connect to it.
 fn connect_impl(
     env: &Env, root_uri: String, lsp_type: String, cmd: String, cmd_args: String, initialize_req: String, timeout: i32,
@@ -739,15 +729,22 @@ fn shutdown_server(mut server: LspServer, req: Request) {
 }
 
 #[defun]
-fn shutdown(env: &Env, root_uri: String, file_type: String, request: String) -> Result<Option<bool>> {
-    let server = match find_and_remove_server(env, &root_uri, &file_type)? {
-        Some(server) => server,
-        None => return Ok(None),
-    };
+fn shutdown(env: &Env, root_uri: String, file_type: String, request: String) -> Result<Option<()>> {
+    safe_call(|| shutdown_impl(env, root_uri, file_type, request))
+}
 
-    let req = unwrap_or_return!(parse_json::<Request>(&request), Ok(Some(false)));
-    thread::spawn(move || shutdown_server(server, req));
-    Ok(Some(true))
+fn shutdown_impl(env: &Env, root_uri: String, file_type: String, request: String) -> Result<()> {
+    with_project2(env, &root_uri, None, |project| match project.servers.remove(&file_type) {
+        Some(server) => {
+            let req = serde_json::from_str::<Request>(&request).context("Failed to parse shutdown request JSON")?;
+            thread::spawn(move || shutdown_server(server, req));
+            Ok(())
+        }
+        None => {
+            env.lspce_message(&format!("No {} server found in project '{}'", file_type, root_uri));
+            bail!("No {} server found in project '{}'", file_type, root_uri);
+        }
+    })
 }
 
 #[defun]
