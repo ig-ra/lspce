@@ -13,7 +13,6 @@ mod tests;
 use anyhow::{anyhow, bail, Context};
 use connection::Connection;
 use emacs::{defun, Env, IntoLisp, Result, Value};
-use error::LspceError;
 use logger::{Logger, LOG_DEBUG, LOG_DISABLED, LOG_FILE_NAME, LOG_LEVEL};
 
 use lsp_types::{
