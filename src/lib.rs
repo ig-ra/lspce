@@ -809,7 +809,8 @@ fn read_response_exact(
 
 #[defun]
 fn read_notification(env: &Env, root_uri: String, file_type: String) -> Result<Option<String>> {
-    with_server(env, &root_uri, &file_type, |server| Ok(server.read_notification().map(|r| r.content)))
+    safe_call(|| with_server2(env, &root_uri, &file_type, |server| Ok(server.read_notification().map(|r| r.content))))
+        .map(|opt| opt.flatten())
 }
 
 #[defun]
