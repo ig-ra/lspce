@@ -541,14 +541,24 @@ where
     })
 }
 
-// wrap API calls to return OK(None) instead of Err
+/// Executes a closure `f`.
+/// If `f` succeeds/Ok, its result (`R`) is converted into `Option<T>`.
+/// - If `R` is `T`, it becomes `Some(T)`.
+/// - If `R` is `Option<T>`, it remains `Option<T>` (flattening).
+/// If `f` fails/Err, the error is logged, and `Ok(None)` is returned.
 #[track_caller]
-fn safe_call<T, F>(f: F) -> Result<Option<T>>
+fn safe_call<T, R, F>(f: F) -> Result<Option<T>>
+// Result<Option<T>, anyhow::Error>
 where
-    F: FnOnce() -> Result<T>,
+    F: FnOnce() -> Result<R>, // The operation returns emacs::Result<T>, which is result::Result<T, anyhow::Error>
+    R: Into<Option<T>>,       // R (closure's Ok type) converts to Option<T> (flattening)
 {
     match f() {
-        Ok(result) => Ok(Some(result)),
+        Ok(result) => {
+            // result is of type R. result.into() produces Option<T> due to the R: Into<Option<T>> bound.
+            // If R is T, then it's Some(T), If R is Option<T>, then it's Option<T>.
+            Ok(result.into())
+        }
         Err(e) => {
             Logger::error(&format!("Error: @{}: {}", Location::caller(), e));
             Ok(None)
@@ -767,13 +777,11 @@ fn read_response_exact(
             Ok(server.read_response_exact(RequestId::from(id), method).map(|r| r.content))
         })
     })
-    .map(|opt| opt.flatten())
 }
 
 #[defun]
 fn read_notification(env: &Env, root_uri: String, file_type: String) -> Result<Option<String>> {
     safe_call(|| with_server(env, &root_uri, &file_type, |server| Ok(server.read_notification().map(|r| r.content))))
-        .map(|opt| opt.flatten())
 }
 
 #[defun]
@@ -790,7 +798,6 @@ fn read_file_diagnostics(env: &Env, root_uri: String, file_type: String, uri: St
                 .transpose()?)
         })
     })
-    .map(|opt| opt.flatten())
 }
 
 #[defun]
