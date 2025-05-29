@@ -802,9 +802,12 @@ fn notify(env: &Env, root_uri: String, file_type: String, req: String) -> Result
 fn read_response_exact(
     env: &Env, root_uri: String, file_type: String, id: String, method: String,
 ) -> Result<Option<String>> {
-    with_server(env, &root_uri, &file_type, |server| {
-        Ok(server.read_response_exact(RequestId::from(id), method).map(|r| r.content))
+    safe_call(|| {
+        with_server2(env, &root_uri, &file_type, |server| {
+            Ok(server.read_response_exact(RequestId::from(id), method).map(|r| r.content))
+        })
     })
+    .map(|opt| opt.flatten())
 }
 
 #[defun]
@@ -832,10 +835,10 @@ fn read_file_diagnostics(env: &Env, root_uri: String, file_type: String, uri: St
 
 #[defun]
 fn read_latest_response_id(env: &Env, root_uri: String, file_type: String) -> Result<Option<String>> {
-    with_server(env, &root_uri, &file_type, |server| Ok(Some(server.get_latest_response_id().to_string())))
+    safe_call(|| with_server2(env, &root_uri, &file_type, |server| Ok(server.get_latest_response_id().to_string())))
 }
 
 #[defun]
 fn read_latest_response_tick(env: &Env, root_uri: String, file_type: String) -> Result<Option<String>> {
-    with_server(env, &root_uri, &file_type, |server| Ok(Some(server.get_latest_response_tick())))
+    safe_call(|| with_server2(env, &root_uri, &file_type, |server| Ok(server.get_latest_response_tick())))
 }
