@@ -501,47 +501,7 @@ fn set_log_file(env: &Env, file: String) -> Result<Value<'_>> {
 }
 
 #[track_caller]
-fn with_project<F, T>(env: &Env, root_uri: &str, caller_loc: Option<&Location<'static>>, f: F) -> Result<Option<T>>
-where
-    F: FnOnce(&mut Project) -> Result<Option<T>>,
-{
-    let mut projects_guard = projects().lock().unwrap();
-    let caller = caller_loc.unwrap_or_else(|| Location::caller());
-
-    match projects_guard.get_mut(root_uri) {
-        Some(project) => f(project),
-        None => {
-            env.lspce_message(&format!("No project found for '{}'. @{}", root_uri, caller));
-            Ok(None)
-        }
-    }
-}
-
-#[track_caller]
-fn with_server<F, T>(env: &Env, root_uri: &str, file_type: &str, f: F) -> Result<Option<T>>
-where
-    F: FnOnce(&mut LspServer) -> Result<Option<T>>,
-{
-    let caller = Location::caller();
-    with_project(env, root_uri, Some(&caller), |project| match project.servers.get_mut(file_type) {
-        Some(server) => {
-            if server.status != SERVER_STATUS_RUNNING {
-                env.lspce_message("LSP server is not ready");
-                Logger::error(&format!("LSP server for {}({}) is not ready", root_uri, file_type));
-                return Ok(None);
-            }
-            f(server)
-        }
-        None => {
-            env.lspce_message(&format!("No LSP server for {}", file_type));
-            Logger::error(&format!("No LSP server for {}. @{}", file_type, Location::caller()));
-            Ok(None)
-        }
-    })
-}
-
-#[track_caller]
-fn with_project2<F, T>(env: &Env, root_uri: &str, caller_loc: Option<&Location<'static>>, f: F) -> Result<T>
+fn with_project<F, T>(env: &Env, root_uri: &str, caller_loc: Option<&Location<'static>>, f: F) -> Result<T>
 where
     F: FnOnce(&mut Project) -> Result<T>,
 {
@@ -559,12 +519,12 @@ where
 }
 
 #[track_caller]
-fn with_server2<F, T>(env: &Env, root_uri: &str, file_type: &str, f: F) -> Result<T>
+fn with_server<F, T>(env: &Env, root_uri: &str, file_type: &str, f: F) -> Result<T>
 where
     F: FnOnce(&mut LspServer) -> Result<T>,
 {
     let caller = Location::caller();
-    with_project2(env, root_uri, Some(&caller), |project| match project.servers.get_mut(file_type) {
+    with_project(env, root_uri, Some(&caller), |project| match project.servers.get_mut(file_type) {
         Some(server) => {
             if server.status != SERVER_STATUS_RUNNING {
                 env.lspce_message("LSP server is not ready");
@@ -733,7 +693,7 @@ fn shutdown(env: &Env, root_uri: String, file_type: String, request: String) -> 
 }
 
 fn shutdown_impl(env: &Env, root_uri: String, file_type: String, request: String) -> Result<()> {
-    with_project2(env, &root_uri, None, |project| match project.servers.remove(&file_type) {
+    with_project(env, &root_uri, None, |project| match project.servers.remove(&file_type) {
         Some(server) => {
             let req = serde_json::from_str::<Request>(&request).context("Failed to parse shutdown request JSON")?;
             thread::spawn(move || shutdown_server(server, req));
@@ -752,7 +712,7 @@ fn server(env: &Env, root_uri: String, file_type: String) -> Result<Option<Strin
 }
 
 fn server_impl(env: &Env, root_uri: String, file_type: String) -> Result<String> {
-    with_project2(env, &root_uri, None, |project| match project.servers.get(&file_type) {
+    with_project(env, &root_uri, None, |project| match project.servers.get(&file_type) {
         Some(server) => serde_json::to_string(&server.server_info).context("failed to serialize server info"),
         None => {
             env.lspce_message(&format!("No {} server found in project '{}'", file_type, root_uri));
@@ -779,7 +739,7 @@ fn request_async(env: &Env, root_uri: String, file_type: String, req: String) ->
 }
 
 fn request_async_impl(env: &Env, root_uri: String, file_type: String, req: String) -> Result<bool> {
-    with_server2(env, &root_uri, &file_type, |server| {
+    with_server(env, &root_uri, &file_type, |server| {
         Logger::trace(&format!("request {}", &req));
         let msg = serde_json::from_str::<Request>(&req).context("Failed to parse request JSON")?;
         _request_async(server, msg)
@@ -789,7 +749,7 @@ fn request_async_impl(env: &Env, root_uri: String, file_type: String, req: Strin
 #[defun]
 fn notify(env: &Env, root_uri: String, file_type: String, req: String) -> Result<Option<bool>> {
     safe_call(|| {
-        with_server2(env, &root_uri, &file_type, |server| {
+        with_server(env, &root_uri, &file_type, |server| {
             Logger::trace(&format!("notify {}", &req));
             let n = serde_json::from_str(&req).context("failed to parse notification JSON")?;
             server.write(Message::Notification(n)).context("notify")
@@ -803,7 +763,7 @@ fn read_response_exact(
     env: &Env, root_uri: String, file_type: String, id: String, method: String,
 ) -> Result<Option<String>> {
     safe_call(|| {
-        with_server2(env, &root_uri, &file_type, |server| {
+        with_server(env, &root_uri, &file_type, |server| {
             Ok(server.read_response_exact(RequestId::from(id), method).map(|r| r.content))
         })
     })
@@ -812,14 +772,14 @@ fn read_response_exact(
 
 #[defun]
 fn read_notification(env: &Env, root_uri: String, file_type: String) -> Result<Option<String>> {
-    safe_call(|| with_server2(env, &root_uri, &file_type, |server| Ok(server.read_notification().map(|r| r.content))))
+    safe_call(|| with_server(env, &root_uri, &file_type, |server| Ok(server.read_notification().map(|r| r.content))))
         .map(|opt| opt.flatten())
 }
 
 #[defun]
 fn read_file_diagnostics(env: &Env, root_uri: String, file_type: String, uri: String) -> Result<Option<String>> {
     safe_call(|| {
-        with_server2(env, &root_uri, &file_type, |server| {
+        with_server(env, &root_uri, &file_type, |server| {
             let mut server_data = server.server_data.lock().unwrap();
             Ok(server_data
                 .file_infos
@@ -835,10 +795,10 @@ fn read_file_diagnostics(env: &Env, root_uri: String, file_type: String, uri: St
 
 #[defun]
 fn read_latest_response_id(env: &Env, root_uri: String, file_type: String) -> Result<Option<String>> {
-    safe_call(|| with_server2(env, &root_uri, &file_type, |server| Ok(server.get_latest_response_id().to_string())))
+    safe_call(|| with_server(env, &root_uri, &file_type, |server| Ok(server.get_latest_response_id().to_string())))
 }
 
 #[defun]
 fn read_latest_response_tick(env: &Env, root_uri: String, file_type: String) -> Result<Option<String>> {
-    safe_call(|| with_server2(env, &root_uri, &file_type, |server| Ok(server.get_latest_response_tick())))
+    safe_call(|| with_server(env, &root_uri, &file_type, |server| Ok(server.get_latest_response_tick())))
 }
