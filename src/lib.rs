@@ -818,19 +818,19 @@ fn read_notification(env: &Env, root_uri: String, file_type: String) -> Result<O
 
 #[defun]
 fn read_file_diagnostics(env: &Env, root_uri: String, file_type: String, uri: String) -> Result<Option<String>> {
-    with_server(env, &root_uri, &file_type, |server| {
-        let mut server_data = server.server_data.lock().unwrap();
-        match server_data.file_infos.get(&uri) {
-            Some(file_info) => match serde_json::to_string(&file_info.diagnostics) {
-                Ok(result) => Ok(Some(result)),
-                Err(e) => {
-                    Logger::error(&format!("Failed to serialize diagnostics for {}: {}", &uri, e));
-                    Ok(None)
-                }
-            },
-            None => Ok(None),
-        }
+    safe_call(|| {
+        with_server2(env, &root_uri, &file_type, |server| {
+            let mut server_data = server.server_data.lock().unwrap();
+            Ok(server_data
+                .file_infos
+                .get(&uri)
+                .map(|file_info| {
+                    serde_json::to_string(&file_info.diagnostics).context("Failed to serialize diagnostics")
+                })
+                .transpose()?)
+        })
     })
+    .map(|opt| opt.flatten())
 }
 
 #[defun]
