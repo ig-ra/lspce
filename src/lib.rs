@@ -14,6 +14,7 @@ use anyhow::{anyhow, bail, Context};
 use connection::Connection;
 use emacs::{defun, Env, IntoLisp, Result, Value};
 use logger::{Logger, LOG_DEBUG, LOG_DISABLED, LOG_FILE_NAME, LOG_LEVEL};
+use lspce_macros::defun_safe;
 
 use lsp_types::{
     Diagnostic, DidChangeTextDocumentParams, InitializeResult, InitializedParams, PublishDiagnosticsParams,
@@ -557,7 +558,9 @@ where
 }
 
 /// Connect to an existing server or create a server subprocess and then connect to it.
-fn connect_impl(
+#[defun_safe]
+#[defun]
+fn connect(
     env: &Env, root_uri: String, lsp_type: String, cmd: String, cmd_args: String, initialize_req: String, timeout: i32,
     emacs_envs: String,
 ) -> Result<Option<String>> {
@@ -589,14 +592,6 @@ fn connect_impl(
 
     Logger::info(&format!("Connected to server successfully. server capabilities {}", &server_info.capabilities));
     Ok(Some(serde_json::to_string(&server_info)?))
-}
-
-#[defun]
-fn connect(
-    env: &Env, root_uri: String, lsp_type: String, cmd: String, cmd_args: String, initialize_req: String, timeout: i32,
-    emacs_envs: String,
-) -> Result<Option<String>> {
-    safe_call(|| connect_impl(env, root_uri, lsp_type, cmd, cmd_args, initialize_req, timeout, emacs_envs))
 }
 
 fn initialize(env: &Env, server: &mut LspServer, req_str: String, timeout: i32) -> bool {
@@ -687,12 +682,9 @@ fn shutdown_server(mut server: LspServer, req: Request) {
     }
 }
 
+#[defun_safe]
 #[defun]
-fn shutdown(env: &Env, root_uri: String, file_type: String, request: String) -> Result<Option<bool>> {
-    safe_call(|| shutdown_impl(env, root_uri, file_type, request))
-}
-
-fn shutdown_impl(env: &Env, root_uri: String, file_type: String, request: String) -> Result<Option<bool>> {
+fn shutdownl(env: &Env, root_uri: String, file_type: String, request: String) -> Result<Option<bool>> {
     with_project(env, &root_uri, None, |project| match project.servers.remove(&file_type) {
         Some(server) => {
             let req = serde_json::from_str::<Request>(&request).context("Failed to parse shutdown request JSON")?;
@@ -706,12 +698,9 @@ fn shutdown_impl(env: &Env, root_uri: String, file_type: String, request: String
     })
 }
 
+#[defun_safe]
 #[defun]
 fn server(env: &Env, root_uri: String, file_type: String) -> Result<Option<String>> {
-    safe_call(|| server_impl(env, root_uri, file_type))
-}
-
-fn server_impl(env: &Env, root_uri: String, file_type: String) -> Result<Option<String>> {
     with_project(env, &root_uri, None, |project| match project.servers.get(&file_type) {
         Some(server) => {
             Ok(Some(serde_json::to_string(&server.server_info).context("failed to serialize server info")?))
@@ -735,71 +724,64 @@ fn _request_async(server: &mut LspServer, req: Request) -> Result<Option<bool>> 
     Ok(Some(server.write(Message::Request(req)).context("request")?))
 }
 
+#[defun_safe]
 #[defun]
 fn request_async(env: &Env, root_uri: String, file_type: String, req: String) -> Result<Option<bool>> {
-    safe_call(|| {
-        with_server(env, &root_uri, &file_type, |server| {
-            Logger::trace(&format!("request {}", &req));
-            let msg = serde_json::from_str::<Request>(&req).context("Failed to parse request JSON")?;
-            _request_async(server, msg)
-        })
+    with_server(env, &root_uri, &file_type, |server| {
+        Logger::trace(&format!("request {}", &req));
+        let msg = serde_json::from_str::<Request>(&req).context("Failed to parse request JSON")?;
+        _request_async(server, msg)
     })
 }
 
+#[defun_safe]
 #[defun]
 fn notify(env: &Env, root_uri: String, file_type: String, req: String) -> Result<Option<bool>> {
-    safe_call(|| {
-        with_server(env, &root_uri, &file_type, |server| {
-            Logger::trace(&format!("notify {}", &req));
-            let n = serde_json::from_str(&req).context("failed to parse notification JSON")?;
-            Ok(Some(server.write(Message::Notification(n)).context("notify")?))
-        })
+    with_server(env, &root_uri, &file_type, |server| {
+        Logger::trace(&format!("notify {}", &req));
+        let n = serde_json::from_str(&req).context("failed to parse notification JSON")?;
+        Ok(Some(server.write(Message::Notification(n)).context("notify")?))
     })
 }
 
 /// precondition: have called read_latest_response_id and gotten the id.
+#[defun_safe]
 #[defun]
 fn read_response_exact(
     env: &Env, root_uri: String, file_type: String, id: String, method: String,
 ) -> Result<Option<String>> {
-    safe_call(|| {
-        with_server(env, &root_uri, &file_type, |server| {
-            Ok(server.read_response_exact(RequestId::from(id), method).map(|r| r.content))
-        })
+    with_server(env, &root_uri, &file_type, |server| {
+        Ok(server.read_response_exact(RequestId::from(id), method).map(|r| r.content))
     })
 }
 
+#[defun_safe]
 #[defun]
 fn read_notification(env: &Env, root_uri: String, file_type: String) -> Result<Option<String>> {
-    safe_call(|| with_server(env, &root_uri, &file_type, |server| Ok(server.read_notification().map(|r| r.content))))
+    with_server(env, &root_uri, &file_type, |server| Ok(server.read_notification().map(|r| r.content)))
 }
 
-//  safe_call(|| with_server(env, &root_uri, &file_type, |server| Ok(server.read_notification().map(|r| r.content))))
-
+#[defun_safe]
 #[defun]
 fn read_file_diagnostics(env: &Env, root_uri: String, file_type: String, uri: String) -> Result<Option<String>> {
-    safe_call(|| {
-        with_server(env, &root_uri, &file_type, |server| {
-            let mut server_data = server.server_data.lock().unwrap();
-            Ok(server_data
-                .file_infos
-                .get(&uri)
-                .map(|file_info| {
-                    serde_json::to_string(&file_info.diagnostics).context("Failed to serialize diagnostics")
-                })
-                .transpose()?)
-        })
+    with_server(env, &root_uri, &file_type, |server| {
+        let mut server_data = server.server_data.lock().unwrap();
+        Ok(server_data
+            .file_infos
+            .get(&uri)
+            .map(|file_info| serde_json::to_string(&file_info.diagnostics).context("Failed to serialize diagnostics"))
+            .transpose()?)
     })
 }
 
+#[defun_safe]
 #[defun]
 fn read_latest_response_id(env: &Env, root_uri: String, file_type: String) -> Result<Option<String>> {
-    safe_call(|| {
-        with_server(env, &root_uri, &file_type, |server| Ok(Some(server.get_latest_response_id().to_string())))
-    })
+    with_server(env, &root_uri, &file_type, |server| Ok(Some(server.get_latest_response_id().to_string())))
 }
 
+#[defun_safe]
 #[defun]
 fn read_latest_response_tick(env: &Env, root_uri: String, file_type: String) -> Result<Option<String>> {
-    safe_call(|| with_server(env, &root_uri, &file_type, |server| Ok(Some(server.get_latest_response_tick()))))
+    with_server(env, &root_uri, &file_type, |server| Ok(Some(server.get_latest_response_tick())))
 }
