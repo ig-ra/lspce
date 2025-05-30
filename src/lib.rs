@@ -104,29 +104,6 @@ impl LspServerData {
     }
 }
 
-macro_rules! unwrap_or_return {
-    ($expr:expr, $ret:expr) => {
-        match $expr {
-            Some(val) => val,
-            None => return $ret,
-        }
-    };
-}
-
-fn parse_json<T>(json_str: &str) -> Option<T>
-where
-    T: DeserializeOwned,
-{
-    match serde_json::from_str::<T>(json_str) {
-        Ok(value) => Some(value),
-        Err(e) => {
-            let type_name = std::any::type_name::<T>();
-            Logger::error(&format!("Failed to parse JSON as {}: {}", type_name, e));
-            None
-        }
-    }
-}
-
 /// Represents a Language Server Protocol (LSP) server instance.
 ///
 /// This struct manages the lifecycle of an LSP server process, including:
@@ -597,7 +574,14 @@ fn connect(
 fn initialize(env: &Env, server: &mut LspServer, req_str: String, timeout: i32) -> bool {
     Logger::debug(&format!("raw initialize request {:#?}", req_str));
 
-    let msg = unwrap_or_return!(parse_json::<Request>(&req_str), false);
+    let msg = match serde_json::from_str::<Request>(&req_str) {
+        Ok(value) => value,
+        Err(e) => {
+            Logger::error(&format!("Failed to parse JSON request: {}", e));
+            return false;
+        }
+    };
+
     let id = msg.id.clone();
 
     Logger::info(&format!("initialize request {}", serde_json::to_string_pretty(&msg).unwrap()));
