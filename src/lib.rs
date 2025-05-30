@@ -307,15 +307,9 @@ impl LspServer {
         }
     }
 
-    pub fn write(&self, request: Message) -> Result<bool> {
+    pub fn write(&self, request: Message) -> Result<()> {
         let transport = self.transport.lock().unwrap();
-        match transport.as_ref() {
-            Some(t) => {
-                t.write(request).map_err(anyhow::Error::msg)?;
-                Ok(true)
-            }
-            None => bail!("transport is not established"),
-        }
+        transport.as_ref().context("transport is not established")?.write(request).map_err(anyhow::Error::msg)
     }
 
     pub fn read_response(&self) -> Option<Response> {
@@ -606,7 +600,7 @@ fn initialize(env: &Env, server: &mut LspServer, req_str: String, timeout: i32) 
                         "initialized".to_string(),
                         serde_json::to_value(InitializedParams {}).unwrap(),
                     );
-                    let _ = server.write(Message::Notification(initialized));
+                    server.write(Message::Notification(initialized));
 
                     server.status = SERVER_STATUS_RUNNING;
 
@@ -649,7 +643,7 @@ fn shutdown_server(mut server: LspServer, req: Request) {
         match server.read_response() {
             Some(resp) if resp.id.eq(&req_id) => {
                 let exit = Notification::new("exit".to_string(), json!({}));
-                let _ = server.write(Message::Notification(exit));
+                server.write(Message::Notification(exit));
                 server.shutdown(false); // Graceful
                 return;
             }
@@ -705,7 +699,8 @@ fn _request_async(server: &mut LspServer, req: Request) -> Result<Option<bool>> 
             server.clear_diagnostics(param.text_document.uri.as_ref());
         }
     }
-    Ok(Some(server.write(Message::Request(req)).context("request")?))
+    server.write(Message::Request(req)).context("request")?;
+    Ok(Some(true))
 }
 
 #[defun_safe]
@@ -724,7 +719,8 @@ fn notify(env: &Env, root_uri: String, file_type: String, req: String) -> Result
     with_server(env, &root_uri, &file_type, |server| {
         Logger::trace(&format!("notify {}", &req));
         let n = serde_json::from_str(&req).context("failed to parse notification JSON")?;
-        Ok(Some(server.write(Message::Notification(n)).context("notify")?))
+        server.write(Message::Notification(n)).context("notify")?;
+        Ok(Some(true))
     })
 }
 
