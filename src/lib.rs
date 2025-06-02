@@ -31,7 +31,7 @@ use std::result::Result as RustResult;
 use std::sync::atomic::AtomicI32;
 use std::sync::atomic::AtomicU8;
 use std::sync::atomic::Ordering;
-use std::time::Instant;
+use std::time::{Duration, Instant};
 use stdio::IoThreads;
 
 use std::{
@@ -547,15 +547,13 @@ fn connect(
         }
     }
 
-    let mut server = LspServer::new(&cmd, &cmd_args, &emacs_envs).map_err(|err| {
-        Logger::error(&format!("Failed to create LSP server for {}, <{}{}>: {:#?}", prj_name_type, cmd, cmd_args, err));
-        err
-    })?;
+    let mut server = LspServer::new(&cmd, &cmd_args, &emacs_envs)
+        .with_context(|| format!("Failed to create LSP server for {}, <{} {}>", prj_name_type, cmd, cmd_args))?;
 
-    if !initialize(env, &mut server, initialize_req, timeout) {
-        server.kill_child();
-        anyhow::bail!("Failed to initialize LSP server for {}", prj_name_type);
-    }
+    initialize(env, &mut server, initialize_req, Duration::from_secs(timeout.max(0) as u64))
+        .inspect_err(|_| server.kill_child())
+        .with_context(|| format!("Failed to initialize LSP server for {}", prj_name_type))?;
+
     let server_info = server.server_info.clone();
 
     let project = projects.entry(root_uri.clone()).or_insert_with(|| Project::new(root_uri.clone()));
@@ -565,64 +563,44 @@ fn connect(
     Ok(Some(serde_json::to_string(&server_info)?))
 }
 
-fn initialize(env: &Env, server: &mut LspServer, req_str: String, timeout: i32) -> bool {
+fn initialize(env: &Env, server: &mut LspServer, req_str: String, timeout: Duration) -> Result<()> {
     Logger::debug(&format!("raw initialize request {:#?}", req_str));
 
-    let msg = match serde_json::from_str::<Request>(&req_str) {
-        Ok(value) => value,
-        Err(e) => {
-            Logger::error(&format!("Failed to parse JSON request: {}", e));
-            return false;
-        }
-    };
+    let msg: Request = serde_json::from_str(&req_str).context("Failed to parse initialize request JSON")?;
+    Logger::info(&format!("initialize request {}", serde_json::to_string_pretty(&msg)?));
 
-    let id = msg.id.clone();
-
-    Logger::info(&format!("initialize request {}", serde_json::to_string_pretty(&msg).unwrap()));
-
-    if _request_async(server, msg).is_err() {
-        return false;
-    }
+    _request_async(server, msg)?;
 
     let start_time = Instant::now();
     loop {
-        let response = server.read_response();
-        match response {
-            Some(m) => {
-                if m.error.is_some() {
-                    Logger::error(&format!("Lsp error {:?}", m.error));
-                    return false;
-                }
-                Logger::info(&format!("initialize response {}", serde_json::to_string_pretty(&m).unwrap()));
-
-                if let Ok(ir) = serde_json::from_value::<InitializeResult>(m.result.unwrap()) {
-                    let initialized = Notification::new(
-                        "initialized".to_string(),
-                        serde_json::to_value(InitializedParams {}).unwrap(),
-                    );
-                    server.write(Message::Notification(initialized));
-
-                    server.status = SERVER_STATUS_RUNNING;
-
-                    if let Some(si) = ir.server_info {
-                        server.server_info.name = si.name.clone();
-                        server.server_info.version = si.version.expect("");
-                    }
-                    server.server_info.capabilities = serde_json::to_string(&ir.capabilities).unwrap();
-
-                    return true;
-                } else {
-                    return false;
-                }
+        if let Some(response) = server.read_response() {
+            if let Some(error) = response.error {
+                bail!("LSP error: {:?}", error);
             }
-            None => {
-                thread::sleep(std::time::Duration::from_millis(10));
+
+            // FIXME: why do we need pretty? what do we do after?
+            Logger::info(&format!("initialize response {}", serde_json::to_string_pretty(&response)?));
+
+            let ir: InitializeResult = serde_json::from_value(response.result.context("Empty initialize response")?)?;
+
+            let initialized = Notification::new("initialized".to_string(), serde_json::to_value(InitializedParams {})?);
+            server.write(Message::Notification(initialized))?;
+
+            server.server_info.capabilities = serde_json::to_string(&ir.capabilities)?;
+            if let Some(si) = ir.server_info {
+                server.server_info.name = si.name;
+                server.server_info.version = si.version.unwrap_or_default();
             }
+            server.status = SERVER_STATUS_RUNNING;
+
+            return Ok(());
         }
-        if timeout > 0 && Instant::now().duration_since(start_time).as_millis() > timeout as u128 * 1000 {
-            Logger::error("timeout when initializing server.");
-            return false;
+
+        if !timeout.is_zero() && start_time.elapsed() > timeout {
+            bail!("Timeout while initializing LSP server");
         }
+
+        thread::sleep(std::time::Duration::from_millis(10));
     }
 }
 
