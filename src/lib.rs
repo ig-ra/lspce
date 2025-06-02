@@ -611,27 +611,30 @@ fn shutdown_server(mut server: LspServer, req: Request) {
     ));
 
     let req_id = req.id.clone();
-
-    if _request_async(&mut server, req).is_err() {
-        return;
-    }
+    let _ = _request_async(&mut server, req);
 
     let start_time = Instant::now();
+    let shutdown_timeout = Duration::from_secs(3);
+
     loop {
         match server.read_response() {
-            Some(resp) if resp.id.eq(&req_id) => {
+            Some(resp) if resp.id == req_id => {
                 let exit = Notification::new("exit".to_string(), json!({}));
-                server.write(Message::Notification(exit));
+                let _ = server.write(Message::Notification(exit));
                 server.shutdown(false); // Graceful
                 return;
             }
             Some(_) => continue, // Ignore responses with non-matched id
             None => {
-                thread::sleep(std::time::Duration::from_millis(10));
+                thread::sleep(Duration::from_millis(10));
             }
         }
 
-        if Instant::now().duration_since(start_time).as_millis() > 3 * 1000 {
+        if start_time.elapsed() > shutdown_timeout {
+            Logger::info(&format!(
+                "Shutdown request for server {}, server_id {} timed out. Forcing shutdown",
+                &server.server_info.name, &server.server_info.id
+            ));
             server.shutdown(true); // Forced
             return;
         }
