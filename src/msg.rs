@@ -263,12 +263,8 @@ impl Request {
 }
 
 impl Notification {
-    pub fn new(method: String, params: impl Serialize) -> Notification {
-        Notification {
-            method,
-            params: serde_json::to_value(params).unwrap(),
-            content: "".to_string(),
-        }
+    pub fn new(method: impl Into<String>, params: impl Serialize) -> Notification {
+        Notification { method: method.into(), params: serde_json::to_value(params).unwrap(), content: "".to_string() }
     }
     pub fn extract<P: DeserializeOwned>(
         self,
