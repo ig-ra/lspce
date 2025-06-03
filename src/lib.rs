@@ -202,9 +202,8 @@ impl LspServer {
                         let id = r.id.clone();
 
                         let mut server_data = server_data.lock().unwrap();
-                        let request_tick = server_data.request_ticks.get(&id);
-                        if (request_tick.is_some()) {
-                            let request_tick = request_tick.unwrap().clone();
+
+                        if let Some(request_tick) = server_data.request_ticks.remove(&id) {
                             Logger::debug(format!("Request tick for id {} is {}", id, request_tick));
                             if (request_tick.eq(&server_data.latest_request_tick)) {
                                 r.request_tick = request_tick.clone();
@@ -222,8 +221,6 @@ impl LspServer {
                                     server_data.latest_response_id, &request_tick
                                 ));
                             }
-
-                            server_data.request_ticks.remove(&id);
                         } else {
                             Logger::trace(format!("No request tick for id {}", id));
                             // if server_data.latest_response_id.lt(&id) {
