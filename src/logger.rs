@@ -34,30 +34,30 @@ pub fn log_file_name() -> String {
 pub struct Logger {}
 
 impl Logger {
-    fn log(buf: &str) {
+    fn log(buf: impl AsRef<str>) {
         let mut logger = logger().lock().unwrap();
         logger.write_all(Local::now().format("%Y-%m-%d %H:%M:%S%.3f - ").to_string().as_bytes());
-        logger.write_all(buf.as_bytes());
+        logger.write_all(buf.as_ref().as_bytes());
         logger.write_all("\n".as_bytes());
     }
 
-    fn log_if_enabled(level: u8, buf: &str) {
+    fn log_if_enabled(level: u8, buf: impl AsRef<str>) {
         let cur_level = LOG_LEVEL.load(Ordering::Relaxed);
         if cur_level >= level {
             Logger::log(buf);
         }
     }
 
-    pub fn error(buf: &str) {
+    pub fn error(buf: impl AsRef<str>) {
         Logger::log_if_enabled(LOG_ERROR, buf);
     }
-    pub fn info(buf: &str) {
+    pub fn info(buf: impl AsRef<str>) {
         Logger::log_if_enabled(LOG_INFO, buf);
     }
-    pub fn trace(buf: &str) {
+    pub fn trace(buf: impl AsRef<str>) {
         Logger::log_if_enabled(LOG_TRACE, buf);
     }
-    pub fn debug(buf: &str) {
+    pub fn debug(buf: impl AsRef<str>) {
         Logger::log_if_enabled(LOG_DEBUG, buf);
     }
 }

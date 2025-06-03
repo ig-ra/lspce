@@ -128,10 +128,10 @@ impl LspServer {
 
         let mut command = Command::new(cmd);
         command.args(args);
-        Logger::info(&format!("Creating new LSP server: <{} {}>", cmd, cmd_args));
+        Logger::info(format!("Creating new LSP server: <{} {}>", cmd, cmd_args));
 
         if !emacs_envs.is_empty() {
-            Logger::info(&format!("emacs_envs: {}", emacs_envs));
+            Logger::info(format!("emacs_envs: {}", emacs_envs));
 
             let envs: HashMap<String, String> =
                 serde_json::from_str(emacs_envs).context("Failed to parse emacs_envs JSON")?;
@@ -198,34 +198,34 @@ impl LspServer {
                         // }
                     }
                     Message::Response(mut r) => {
-                        Logger::trace(&format!("Response {}", &r.content));
+                        Logger::trace(format!("Response {}", r.content));
                         let id = r.id.clone();
 
                         let mut server_data = server_data.lock().unwrap();
                         let request_tick = server_data.request_ticks.get(&id);
                         if (request_tick.is_some()) {
                             let request_tick = request_tick.unwrap().clone();
-                            Logger::debug(&format!("Request tick for id {} is {}", &id, &request_tick));
+                            Logger::debug(format!("Request tick for id {} is {}", id, request_tick));
                             if (request_tick.eq(&server_data.latest_request_tick)) {
                                 r.request_tick = request_tick.clone();
                                 server_data.responses.push_back(r);
                             }
-                            Logger::debug(&format!(
+                            Logger::debug(format!(
                                 "Latest response id is {}, current response id {}",
-                                &server_data.latest_response_id, &id
+                                server_data.latest_response_id, &id
                             ));
                             if server_data.latest_response_id.lt(&id) {
                                 server_data.latest_response_id = id.clone();
                                 server_data.latest_response_tick = request_tick.clone();
-                                Logger::debug(&format!(
+                                Logger::debug(format!(
                                     "Change Latest response tick for id {} to {}",
-                                    &server_data.latest_response_id, &request_tick
+                                    server_data.latest_response_id, &request_tick
                                 ));
                             }
 
                             server_data.request_ticks.remove(&id);
                         } else {
-                            Logger::trace(&format!("No request tick for id {}", id));
+                            Logger::trace(format!("No request tick for id {}", id));
                             // if server_data.latest_response_id.lt(&id) {
                             //     server_data.latest_response_id = id.clone();
                             // }
@@ -325,7 +325,7 @@ impl LspServer {
         let latest_request_tick = server_data.latest_request_tick.clone();
         let mut reserved: VecDeque<Response> = VecDeque::new();
         for iter in server_data.responses.iter() {
-            Logger::debug(&format!("read_response_exact response {:#?}", &iter));
+            Logger::debug(format!("read_response_exact response {:#?}", iter));
             if iter.id.eq(&id) {
                 result = Some(iter.clone());
             }
@@ -340,7 +340,7 @@ impl LspServer {
         server_data.responses.append(&mut reserved);
 
         if result.is_none() {
-            Logger::trace(&format!("read_response_exact get null for request_id {}, method {}", id, method));
+            Logger::trace(format!("read_response_exact get null for request_id {}, method {}", id, method));
         }
 
         result
@@ -371,22 +371,23 @@ impl LspServer {
 
         self.stop_dispatcher();
         self.exit_transport();
-        Logger::debug(&format!("after exit transport for server {}, server_id {}.", &server_name, &server_id));
+        let srv_name_id = format!("{}({})", server_name, server_id);
+        Logger::debug(format!("after exit transport for {}", srv_name_id));
 
         if force {
             // Forced cleanup - kill the child process
             self.kill_child();
-            Logger::info(&format!("forcefully terminated server {}, server_id {}", &server_name, &server_id));
+            Logger::info(format!("forcefully terminated {}", srv_name_id));
         } else {
             // Graceful cleanup
             if let Some(threads) = self.transport_threads.take() {
                 threads.join();
-                Logger::info(&format!("after thread join for server {}, server_id {}.", &server_name, &server_id));
+                Logger::info(format!("after thread join for {}", srv_name_id));
             }
 
             if let Some(mut child) = self.child.take() {
                 let _ = child.wait();
-                Logger::info(&format!("after child wait for server {}, server_id {}.", &server_name, &server_id));
+                Logger::info(format!("after child wait for {}", srv_name_id));
             }
         }
     }
@@ -483,8 +484,8 @@ where
     match projects_guard.get_mut(root_uri) {
         Some(project) => f(project),
         None => {
-            env.lspce_message(&format!("No project found for '{}'. @{}", root_uri, caller));
-            Logger::error(&format!("No project found for '{}'. @{}", root_uri, caller));
+            env.lspce_message(format!("No project found for '{}'. @{}", root_uri, caller));
+            Logger::error(format!("No project found for '{}'. @{}", root_uri, caller));
             bail!("no project found for '{}'", root_uri)
         }
     }
@@ -500,14 +501,14 @@ where
         Some(server) => {
             if server.status != SERVER_STATUS_RUNNING {
                 env.lspce_message("LSP server is not ready");
-                Logger::error(&format!("LSP server for {}({}) is not ready", root_uri, file_type));
+                Logger::error(format!("LSP server for {}({}) is not ready", root_uri, file_type));
                 bail!("LSP server for {}({}) is not ready", root_uri, file_type)
             }
             f(server)
         }
         None => {
-            env.lspce_message(&format!("No LSP server for {}", file_type));
-            Logger::error(&format!("No LSP server for {}. @{}", file_type, Location::caller()));
+            env.lspce_message(format!("No LSP server for {}", file_type));
+            Logger::error(format!("No LSP server for {}. @{}", file_type, Location::caller()));
             bail!("No LSP server for {}", file_type)
         }
     })
@@ -522,7 +523,7 @@ where
     match f() {
         ok @ Ok(_) => ok,
         Err(e) => {
-            Logger::error(&format!("Error: @{}: {}", Location::caller(), e));
+            Logger::error(format!("Error: @{}: {}", Location::caller(), e));
             Ok(None)
         }
     }
@@ -536,13 +537,13 @@ fn connect(
     emacs_envs: String,
 ) -> Result<Option<String>> {
     let prj_name_type = format!("{}({})", root_uri, lsp_type);
-    Logger::info(&format!("Creating and initializing LSP server for {}", &prj_name_type));
+    Logger::info(format!("Creating and initializing LSP server for {}", prj_name_type));
 
     let mut projects = projects().lock().unwrap();
 
     if let Some(p) = projects.get(&root_uri) {
         if let Some(s) = p.servers.get(&lsp_type) {
-            Logger::info(&format!("Using existing LSP server {}", &prj_name_type));
+            Logger::info(format!("Using existing LSP server {}", prj_name_type));
             return Ok(Some(serde_json::to_string(&s.server_info).context("failed to serialize server info")?));
         }
     }
@@ -559,15 +560,15 @@ fn connect(
     let project = projects.entry(root_uri.clone()).or_insert_with(|| Project::new(root_uri.clone()));
     project.servers.insert(lsp_type, server);
 
-    Logger::info(&format!("Connected to server successfully. server capabilities {}", &server_info.capabilities));
+    Logger::info(format!("Connected to server successfully. server capabilities {}", &server_info.capabilities));
     Ok(Some(serde_json::to_string(&server_info)?))
 }
 
 fn initialize(env: &Env, server: &mut LspServer, req_str: String, timeout: Duration) -> Result<()> {
-    Logger::debug(&format!("raw initialize request {:#?}", req_str));
+    Logger::debug(format!("raw initialize request {:#?}", req_str));
 
     let msg: Request = serde_json::from_str(&req_str).context("Failed to parse initialize request JSON")?;
-    Logger::info(&format!("initialize request {}", serde_json::to_string_pretty(&msg)?));
+    Logger::info(format!("initialize request {}", serde_json::to_string_pretty(&msg)?));
 
     _request_async(server, msg)?;
 
@@ -579,7 +580,7 @@ fn initialize(env: &Env, server: &mut LspServer, req_str: String, timeout: Durat
             }
 
             // FIXME: why do we need pretty? what do we do after?
-            Logger::info(&format!("initialize response {}", serde_json::to_string_pretty(&response)?));
+            Logger::info(format!("initialize response {}", serde_json::to_string_pretty(&response)?));
 
             let ir: InitializeResult = serde_json::from_value(response.result.context("Empty initialize response")?)?;
 
@@ -605,10 +606,8 @@ fn initialize(env: &Env, server: &mut LspServer, req_str: String, timeout: Durat
 }
 
 fn shutdown_server(mut server: LspServer, req: Request) {
-    Logger::info(&format!(
-        "start to shut down server {}, server_id {}",
-        &server.server_info.name, &server.server_info.id
-    ));
+    let srv_name_id = format!("{}({})", server.server_info.name, server.server_info.id);
+    Logger::info(format!("start to shut down {}", srv_name_id));
 
     let req_id = req.id.clone();
     let _ = _request_async(&mut server, req);
@@ -631,10 +630,7 @@ fn shutdown_server(mut server: LspServer, req: Request) {
         }
 
         if start_time.elapsed() > shutdown_timeout {
-            Logger::info(&format!(
-                "Shutdown request for server {}, server_id {} timed out. Forcing shutdown",
-                &server.server_info.name, &server.server_info.id
-            ));
+            Logger::info(format!("Shutdown request for {} timed out. Forcing shutdown", srv_name_id));
             server.shutdown(true); // Forced
             return;
         }
@@ -651,7 +647,7 @@ fn shutdownl(env: &Env, root_uri: String, file_type: String, request: String) ->
             Ok(Some(true))
         }
         None => {
-            env.lspce_message(&format!("No {} server found in project '{}'", file_type, root_uri));
+            env.lspce_message(format!("No {} server found in project '{}'", file_type, root_uri));
             bail!("No {} server found in project '{}'", file_type, root_uri);
         }
     })
@@ -665,7 +661,7 @@ fn server(env: &Env, root_uri: String, file_type: String) -> Result<Option<Strin
             Ok(Some(serde_json::to_string(&server.server_info).context("failed to serialize server info")?))
         }
         None => {
-            env.lspce_message(&format!("No {} server found in project '{}'", file_type, root_uri));
+            env.lspce_message(format!("No {} server found in project '{}'", file_type, root_uri));
             bail!("No {} server found in project '{}'", file_type, root_uri)
         }
     })
@@ -688,7 +684,7 @@ fn _request_async(server: &mut LspServer, req: Request) -> Result<Option<bool>> 
 #[defun]
 fn request_async(env: &Env, root_uri: String, file_type: String, req: String) -> Result<Option<bool>> {
     with_server(env, &root_uri, &file_type, |server| {
-        Logger::trace(&format!("request {}", &req));
+        Logger::trace(format!("request {}", &req));
         let msg = serde_json::from_str::<Request>(&req).context("Failed to parse request JSON")?;
         _request_async(server, msg)
     })
@@ -698,7 +694,7 @@ fn request_async(env: &Env, root_uri: String, file_type: String, req: String) ->
 #[defun]
 fn notify(env: &Env, root_uri: String, file_type: String, req: String) -> Result<Option<bool>> {
     with_server(env, &root_uri, &file_type, |server| {
-        Logger::trace(&format!("notify {}", &req));
+        Logger::trace(format!("notify {}", &req));
         let n = serde_json::from_str(&req).context("failed to parse notification JSON")?;
         server.write(Message::Notification(n)).context("notify")?;
         Ok(Some(true))
