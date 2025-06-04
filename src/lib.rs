@@ -77,6 +77,7 @@ const SERVER_STATUS_EXITING: u8 = 3;
 
 const POLL_INTERVAL: Duration = Duration::from_millis(10);
 const GRACEFUL_SHUTDOWN_TIMEOUT: Duration = Duration::from_secs(3);
+const MAX_NOTIFICATIONS: usize = 10;
 
 struct LspServerData {
     latest_request_id: RequestId,
@@ -253,7 +254,7 @@ impl LspServer {
                         } else {
                             // other notifications
                             let mut server_data = server_data.lock().unwrap();
-                            if server_data.notifications.len() > 10 {
+                            if server_data.notifications.len() > MAX_NOTIFICATIONS {
                                 server_data.notifications.pop_front();
                             }
                             server_data.notifications.push_back(r);
