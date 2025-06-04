@@ -562,7 +562,7 @@ fn connect(
     let mut server = LspServer::new(&cmd, &cmd_args, &emacs_envs)
         .with_context(|| format!("Failed to create LSP server for {}, <{} {}>", prj_name_type, cmd, cmd_args))?;
 
-    initialize(env, &mut server, initialize_req, Duration::from_secs(timeout.max(0) as u64))
+    initialize(env, &mut server, &initialize_req, Duration::from_secs(timeout.max(0) as u64))
         .inspect_err(|_| server.kill_child())
         .with_context(|| format!("Failed to initialize LSP server for {}", prj_name_type))?;
 
@@ -575,7 +575,7 @@ fn connect(
     Ok(Some(serde_json::to_string(&server_info)?))
 }
 
-fn initialize(env: &Env, server: &mut LspServer, req_str: String, timeout: Duration) -> Result<()> {
+fn initialize(env: &Env, server: &mut LspServer, req_str: &str, timeout: Duration) -> Result<()> {
     Logger::debug(format!("raw initialize request {:#?}", req_str));
 
     let msg: Request = serde_json::from_str(&req_str).context("Failed to parse initialize request JSON")?;
