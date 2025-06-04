@@ -470,20 +470,38 @@ fn set_log_file(env: &Env, file: String) -> Result<Value<'_>> {
     env.lspce_message(format!("Set logging file to {}", file))
 }
 
+macro_rules! env_message_and_bail {
+    ($env:expr, @ $location:expr, $($arg:tt)*) => {
+        env_message_and_bail!($env, loc: $location, $($arg)*)
+    };
+
+    ($env:expr, loc: $location:expr, $($arg:tt)*) => {{
+        let msg = format!($($arg)*);
+        let _ = $env.lspce_message(&msg);
+        let bail_msg = match $location {
+            None => msg,
+            Some(loc) => format!("{}. @{}", msg, loc),
+        };
+        anyhow::bail!(bail_msg)
+    }};
+
+    ($env:expr, $($arg:tt)*) => {
+        env_message_and_bail!($env, loc: None::<&std::panic::Location>, $($arg)*)
+    };
+}
+
 #[track_caller]
 fn with_project<F, T>(env: &Env, root_uri: &str, caller_loc: Option<&Location<'static>>, f: F) -> Result<Option<T>>
 where
     F: FnOnce(&mut Project) -> Result<Option<T>>,
 {
     let mut projects_guard = projects().lock().unwrap();
-    let caller = caller_loc.unwrap_or_else(|| Location::caller());
+    let caller = Some(caller_loc.unwrap_or_else(|| Location::caller()));
 
     match projects_guard.get_mut(root_uri) {
         Some(project) => f(project),
         None => {
-            env.lspce_message(format!("No project found for '{}'. @{}", root_uri, caller));
-            Logger::error(format!("No project found for '{}'. @{}", root_uri, caller));
-            bail!("no project found for '{}'", root_uri)
+            env_message_and_bail!(env, @ caller, "no project found for '{}'", root_uri)
         }
     }
 }
@@ -493,20 +511,16 @@ fn with_server<F, T>(env: &Env, root_uri: &str, file_type: &str, f: F) -> Result
 where
     F: FnOnce(&mut LspServer) -> Result<Option<T>>,
 {
-    let caller = Location::caller();
-    with_project(env, root_uri, Some(&caller), |project| match project.servers.get_mut(file_type) {
+    let caller = Some(Location::caller());
+    with_project(env, root_uri, caller, |project| match project.servers.get_mut(file_type) {
         Some(server) => {
             if server.status != SERVER_STATUS_RUNNING {
-                env.lspce_message("LSP server is not ready");
-                Logger::error(format!("LSP server for {}({}) is not ready", root_uri, file_type));
-                bail!("LSP server for {}({}) is not ready", root_uri, file_type)
+                env_message_and_bail!(env, @ caller, "LSP server for {}({}) is not ready", root_uri, file_type)
             }
             f(server)
         }
         None => {
-            env.lspce_message(format!("No LSP server for {}", file_type));
-            Logger::error(format!("No LSP server for {}. @{}", file_type, Location::caller()));
-            bail!("No LSP server for {}", file_type)
+            env_message_and_bail!(env, @ caller, "No LSP server for {}({})", root_uri, file_type)
         }
     })
 }
@@ -644,8 +658,7 @@ fn shutdownl(env: &Env, root_uri: String, file_type: String, request: String) ->
             Ok(Some(true))
         }
         None => {
-            env.lspce_message(format!("No {} server found in project '{}'", file_type, root_uri));
-            bail!("No {} server found in project '{}'", file_type, root_uri);
+            env_message_and_bail!(env, "No {} server found in project '{}'", file_type, root_uri);
         }
     })
 }
@@ -658,8 +671,7 @@ fn server(env: &Env, root_uri: String, file_type: String) -> Result<Option<Strin
             Ok(Some(serde_json::to_string(&server.server_info).context("failed to serialize server info")?))
         }
         None => {
-            env.lspce_message(format!("No {} server found in project '{}'", file_type, root_uri));
-            bail!("No {} server found in project '{}'", file_type, root_uri)
+            env_message_and_bail!(env, "No {} server found in project '{}'", file_type, root_uri)
         }
     })
 }
