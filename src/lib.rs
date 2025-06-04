@@ -76,6 +76,9 @@ const SERVER_STATUS_STARTING: u8 = 1;
 const SERVER_STATUS_RUNNING: u8 = 2;
 const SERVER_STATUS_EXITING: u8 = 3;
 
+const POLL_INTERVAL: Duration = Duration::from_millis(10);
+const GRACEFUL_SHUTDOWN_TIMEOUT: Duration = Duration::from_secs(3);
+
 struct LspServerData {
     latest_request_id: RequestId,
     latest_request_tick: String,
@@ -612,7 +615,7 @@ fn initialize(env: &Env, server: &mut LspServer, req_str: &str, timeout: Duratio
             bail!("Timeout while initializing LSP server");
         }
 
-        thread::sleep(std::time::Duration::from_millis(10));
+        thread::sleep(POLL_INTERVAL);
     }
 }
 
@@ -624,7 +627,7 @@ fn shutdown_server(mut server: LspServer, req: Request) {
     let _ = _request_async(&mut server, req);
 
     let start_time = Instant::now();
-    let shutdown_timeout = Duration::from_secs(3);
+    let shutdown_timeout = GRACEFUL_SHUTDOWN_TIMEOUT;
 
     loop {
         match server.read_response() {
