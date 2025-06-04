@@ -9,7 +9,6 @@ use std::{
 };
 
 use chrono::Local;
-use lazy_static::lazy_static;
 
 pub const LOG_DISABLED: u8 = 0;
 pub const LOG_ERROR: u8 = 1;
@@ -19,9 +18,7 @@ pub const LOG_DEBUG: u8 = 4;
 
 pub static LOG_LEVEL: AtomicU8 = AtomicU8::new(LOG_INFO);
 
-lazy_static! {
-    pub static ref LOG_FILE_NAME: Mutex<String> = Mutex::new(String::new());
-}
+pub static LOG_FILE_NAME: Lazy<Mutex<String>> = Lazy::new(|| Mutex::new(String::new()));
 
 pub fn log_enabled(level: u8) -> bool {
     LOG_LEVEL.load(Ordering::Relaxed) >= level
