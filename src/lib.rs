@@ -20,7 +20,6 @@ use lsp_types::{
     Diagnostic, DidChangeTextDocumentParams, InitializeResult, InitializedParams, PublishDiagnosticsParams,
 };
 use msg::{Message, Notification, Request, RequestId, Response};
-use once_cell::sync::Lazy;
 use serde::de::DeserializeOwned;
 use serde::{Deserialize, Serialize};
 use serde_json::json;
@@ -39,7 +38,7 @@ use std::{
     fmt::Debug,
     io::{Read, Write},
     process::{Child, Command, Stdio},
-    sync::{Arc, Mutex},
+    sync::{Arc, LazyLock, Mutex},
     thread::{self, JoinHandle, Thread},
 };
 
@@ -400,7 +399,8 @@ impl Project {
         Project { root_uri, servers: HashMap::new() }
     }
 }
-static PROJECTS: Lazy<Arc<Mutex<HashMap<String, Project>>>> = Lazy::new(|| Arc::new(Mutex::new(HashMap::new())));
+static PROJECTS: LazyLock<Arc<Mutex<HashMap<String, Project>>>> =
+    LazyLock::new(|| Arc::new(Mutex::new(HashMap::new())));
 
 fn projects() -> &'static Arc<Mutex<HashMap<String, Project>>> {
     &PROJECTS

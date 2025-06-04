@@ -1,10 +1,9 @@
-use once_cell::sync::Lazy;
 use std::{
     fs::File,
     io::{Error, Write},
     sync::{
         atomic::{AtomicU8, Ordering},
-        Arc, Mutex,
+        Arc, LazyLock, Mutex,
     },
 };
 
@@ -18,7 +17,7 @@ pub const LOG_DEBUG: u8 = 4;
 
 pub static LOG_LEVEL: AtomicU8 = AtomicU8::new(LOG_INFO);
 
-pub static LOG_FILE_NAME: Lazy<Mutex<String>> = Lazy::new(|| Mutex::new(String::new()));
+pub static LOG_FILE_NAME: LazyLock<Mutex<String>> = LazyLock::new(|| Mutex::new(String::new()));
 
 pub fn log_enabled(level: u8) -> bool {
     LOG_LEVEL.load(Ordering::Relaxed) >= level
@@ -70,7 +69,7 @@ impl Write for FakeFile {
     }
 }
 
-static LOGGER: Lazy<Arc<Mutex<dyn Write + Send>>> = Lazy::new(|| {
+static LOGGER: LazyLock<Arc<Mutex<dyn Write + Send>>> = LazyLock::new(|| {
     let file_name = log_file_name();
     if !file_name.is_empty() {
         if let Ok(f) = File::options().create(true).append(true).open(file_name) {
