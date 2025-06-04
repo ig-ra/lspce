@@ -190,7 +190,7 @@ impl LspServer {
             if let Some(m) = message {
                 match m {
                     Message::Request(r) => {
-                        if r.method.eq("workspace/configuration") {
+                        if r.method == "workspace/configuration" {
                             let mut server_data = server_data.lock().unwrap();
                             server_data.requests.push_back(r);
                         }
@@ -208,7 +208,7 @@ impl LspServer {
 
                         if let Some(request_tick) = server_data.request_ticks.remove(&id) {
                             Logger::debug(format!("Request tick for id {} is {}", id, request_tick));
-                            if (request_tick.eq(&server_data.latest_request_tick)) {
+                            if request_tick == server_data.latest_request_tick {
                                 r.request_tick = request_tick.clone();
                                 server_data.responses.push_back(r);
                             }
@@ -216,7 +216,7 @@ impl LspServer {
                                 "Latest response id is {}, current response id {}",
                                 server_data.latest_response_id, &id
                             ));
-                            if server_data.latest_response_id.lt(&id) {
+                            if server_data.latest_response_id < id {
                                 server_data.latest_response_id = id.clone();
                                 server_data.latest_response_tick = request_tick.clone();
                                 Logger::debug(format!(
@@ -233,7 +233,7 @@ impl LspServer {
                     }
                     Message::Notification(r) => {
                         // cacha diagnostics so they won't pour into Emacs
-                        if r.method.eq("textDocument/publishDiagnostics") {
+                        if r.method == "textDocument/publishDiagnostics" {
                             let mut params = serde_json::from_value::<PublishDiagnosticsParams>(r.params).unwrap();
 
                             let uri = params.uri.as_str().to_string();
@@ -322,16 +322,13 @@ impl LspServer {
         let mut result: Option<Response> = None;
         let mut server_data = self.server_data.lock().unwrap();
 
-        let latest_request_tick = server_data.latest_request_tick.clone();
         let mut reserved: VecDeque<Response> = VecDeque::new();
         for iter in server_data.responses.iter() {
             Logger::debug(format!("read_response_exact response {:#?}", iter));
-            if iter.id.eq(&id) {
+            if iter.id == id {
                 result = Some(iter.clone());
             }
-
-            let request_tick = iter.request_tick.clone();
-            if request_tick.eq(&latest_request_tick) && iter.id.ne(&id) {
+            if iter.request_tick == server_data.latest_request_tick && iter.id != id {
                 reserved.push_back(iter.clone());
             }
         }
@@ -342,7 +339,6 @@ impl LspServer {
         if result.is_none() {
             Logger::trace(format!("read_response_exact get null for request_id {}, method {}", id, method));
         }
-
         result
     }
 
