@@ -51,8 +51,8 @@ struct FileInfo {
 }
 
 impl FileInfo {
-    pub fn new(uri: String) -> FileInfo {
-        FileInfo { uri, diagnostics: Vec::new() }
+    pub fn new(uri: impl AsRef<str>) -> FileInfo {
+        FileInfo { uri: uri.as_ref().into(), diagnostics: Vec::new() }
     }
 }
 
@@ -235,8 +235,8 @@ impl LspServer {
                         if r.method == "textDocument/publishDiagnostics" {
                             let mut params = serde_json::from_value::<PublishDiagnosticsParams>(r.params).unwrap();
 
-                            let uri = params.uri.as_str().to_string();
-                            let mut file_info = FileInfo::new(uri.clone());
+                            let uri_string: String = params.uri.into();
+                            let mut file_info = FileInfo::new(&uri_string);
                             // cache no more than MAX_DIAGNOSTICS_COUNT diagnostics
                             let max_diagnostic_count = MAX_DIAGNOSTICS_COUNT.load(Ordering::Relaxed);
                             if max_diagnostic_count < 0 {
@@ -249,7 +249,7 @@ impl LspServer {
                             }
 
                             let mut server_data = server_data.lock().unwrap();
-                            server_data.file_infos.insert(uri.clone(), file_info);
+                            server_data.file_infos.insert(uri_string, file_info);
                         } else {
                             // other notifications
                             let mut server_data = server_data.lock().unwrap();
