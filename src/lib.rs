@@ -650,7 +650,7 @@ fn shutdown_server(mut server: LspServer, req: Request) {
 
 #[defun_safe]
 #[defun]
-fn shutdownl(env: &Env, root_uri: String, file_type: String, request: String) -> Result<Option<bool>> {
+fn shutdown(env: &Env, root_uri: String, file_type: String, request: String) -> Result<Option<bool>> {
     with_project(env, &root_uri, None, |project| match project.servers.remove(&file_type) {
         Some(server) => {
             let req = serde_json::from_str::<Request>(&request).context("Failed to parse shutdown request JSON")?;
