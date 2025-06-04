@@ -361,29 +361,30 @@ impl LspServer {
         }
     }
 
-    fn shutdown(&mut self, force: bool) {
-        let server_name = self.server_info.name.clone();
-        let server_id = self.server_info.id.clone();
+    pub fn name_id(&self) -> String {
+        format!("{}({})", self.server_info.name, self.server_info.id)
+    }
 
+    fn shutdown(&mut self, force: bool) {
         self.stop_dispatcher();
         self.exit_transport();
-        let srv_name_id = format!("{}({})", server_name, server_id);
-        Logger::debug(format!("after exit transport for {}", srv_name_id));
+
+        Logger::debug(format!("after exit transport for {}", self.name_id()));
 
         if force {
             // Forced cleanup - kill the child process
             self.kill_child();
-            Logger::info(format!("forcefully terminated {}", srv_name_id));
+            Logger::info(format!("forcefully terminated {}", self.name_id()));
         } else {
             // Graceful cleanup
             if let Some(threads) = self.transport_threads.take() {
                 threads.join();
-                Logger::info(format!("after thread join for {}", srv_name_id));
+                Logger::info(format!("after thread join for {}", self.name_id()));
             }
 
             if let Some(mut child) = self.child.take() {
                 let _ = child.wait();
-                Logger::info(format!("after child wait for {}", srv_name_id));
+                Logger::info(format!("after child wait for {}", self.name_id()));
             }
         }
     }
@@ -616,8 +617,7 @@ fn initialize(env: &Env, server: &mut LspServer, req_str: &str, timeout: Duratio
 }
 
 fn shutdown_server(mut server: LspServer, req: Request) {
-    let srv_name_id = format!("{}({})", server.server_info.name, server.server_info.id);
-    Logger::info(format!("start to shut down {}", srv_name_id));
+    Logger::info(format!("start to shut down {}", server.name_id()));
 
     let req_id = req.id.clone();
     let _ = _request_async(&mut server, req);
@@ -640,7 +640,7 @@ fn shutdown_server(mut server: LspServer, req: Request) {
         }
 
         if start_time.elapsed() > shutdown_timeout {
-            Logger::info(format!("Shutdown request for {} timed out. Forcing shutdown", srv_name_id));
+            Logger::info(format!("Shutdown request for {} timed out. Forcing shutdown", server.name_id()));
             server.shutdown(true); // Forced
             return;
         }
