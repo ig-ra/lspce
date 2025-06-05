@@ -571,7 +571,7 @@ fn connect(
 
     let server_info = server.server_info.clone();
 
-    let project = projects.entry(root_uri.clone()).or_insert_with(|| Project::new(root_uri.clone()));
+    let project = projects.entry(root_uri.clone()).or_insert_with(|| Project::new(root_uri));
     project.servers.insert(lsp_type, server);
 
     Logger::info(format!("Connected to server successfully. server capabilities {}", &server_info.capabilities));
