@@ -18,6 +18,7 @@ use lspce_macros::defun_safe;
 
 use lsp_types::{
     Diagnostic, DidChangeTextDocumentParams, InitializeResult, InitializedParams, PublishDiagnosticsParams,
+    VersionedTextDocumentIdentifier,
 };
 use msg::{Message, Notification, Request, RequestId, Response};
 use serde::de::DeserializeOwned;
@@ -353,12 +354,11 @@ impl LspServer {
         server_data.requests.pop_front()
     }
 
-    pub fn clear_diagnostics(&self, uri: &str) {
+    pub fn clear_diagnostics(&self, uri: impl AsRef<str>) {
         let mut server_data = self.server_data.lock().unwrap();
 
-        if let Some(mut file_info) = server_data.file_infos.get_mut(uri) {
-            let result = serde_json::to_string(&file_info.diagnostics);
-            file_info.diagnostics = Vec::new();
+        if let Some(mut file_info) = server_data.file_infos.get_mut(uri.as_ref()) {
+            file_info.diagnostics.clear();
         }
     }
 
@@ -682,9 +682,12 @@ fn _request_async(server: &mut LspServer, req: Request) -> Result<Option<bool>> 
     let request_tick = req.request_tick.as_ref().context("no request_tick in request")?;
     server.update_request_info(req.id.clone(), request_tick.clone());
 
+    // TODO: should we let LSP server to manage and clear diagnostics and remove this entirely?
+
     if req.method == "textDocument/didChange" || req.method == "textDocument/didClose" {
-        if let Ok(param) = serde_json::from_value::<DidChangeTextDocumentParams>(req.params.clone()) {
-            server.clear_diagnostics(param.text_document.uri.as_ref());
+        // extract uri, wihotut parsing the whole request
+        if let Some(uri) = req.params.get("textDocument").and_then(|td| td.get("uri")).and_then(|uri| uri.as_str()) {
+            server.clear_diagnostics(uri);
         }
     }
     server.write(Message::Request(req)).context("request")?;
