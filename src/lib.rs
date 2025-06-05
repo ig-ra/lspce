@@ -234,7 +234,7 @@ impl LspServer {
                         }
                     }
                     Message::Notification(r) => {
-                        // cacha diagnostics so they won't pour into Emacs
+                        // cache diagnostics so they won't pour into Emacs
                         if r.method == "textDocument/publishDiagnostics" {
                             let mut params = serde_json::from_value::<PublishDiagnosticsParams>(r.params).unwrap();
 
