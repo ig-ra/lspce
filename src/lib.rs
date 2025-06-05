@@ -468,8 +468,9 @@ fn get_log_level(env: &Env) -> Result<u8> {
 /// set logging file name
 #[defun]
 fn set_log_file(env: &Env, file: String) -> Result<Value<'_>> {
-    *LOG_FILE_NAME.lock().unwrap() = file.clone();
-    env.lspce_message(format!("Set logging file to {}", file))
+    let message = format!("Set logging file to {}", file);
+    *LOG_FILE_NAME.lock().unwrap() = file;
+    env.lspce_message(message)
 }
 
 macro_rules! env_message_and_bail {
