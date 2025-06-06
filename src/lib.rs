@@ -219,11 +219,11 @@ impl LspServer {
                                 server_data.latest_response_id, &id
                             ));
                             if server_data.latest_response_id < id {
-                                server_data.latest_response_id = id.clone();
-                                server_data.latest_response_tick = request_tick.clone();
+                                server_data.latest_response_id = id;
+                                server_data.latest_response_tick = request_tick;
                                 Logger::debug(format!(
-                                    "Change Latest response tick for id {} to {}",
-                                    server_data.latest_response_id, &request_tick
+                                    "Set latest response tick for id {} to {}",
+                                    server_data.latest_response_id, &server_data.latest_response_tick
                                 ));
                             }
                         } else {
