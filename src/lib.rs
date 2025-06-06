@@ -316,26 +316,26 @@ impl LspServer {
     }
 
     //
-    pub fn read_response_exact(&self, id: RequestId, method: String) -> Option<Response> {
+    pub fn read_response_exact(&self, id: RequestId, method: impl AsRef<str>) -> Option<Response> {
         let mut result: Option<Response> = None;
         let mut server_data = self.server_data.lock().unwrap();
+        let latest_request_tick = server_data.latest_request_tick.clone();
 
         let mut reserved: VecDeque<Response> = VecDeque::new();
-        for iter in server_data.responses.iter() {
-            Logger::debug(format!("read_response_exact response {:#?}", iter));
-            if iter.id == id {
-                result = Some(iter.clone());
+        for response in server_data.responses.drain(..) {
+            Logger::debug(format!("read_response_exact response {:#?}", response));
+            if response.id == id {
+                result = Some(response);
+            } else if response.request_tick == latest_request_tick {
+                reserved.push_back(response);
             }
-            if iter.request_tick == server_data.latest_request_tick && iter.id != id {
-                reserved.push_back(iter.clone());
-            }
+            // responses that don't match either condition are dropped
         }
 
-        server_data.responses.clear();
         server_data.responses.append(&mut reserved);
 
         if result.is_none() {
-            Logger::trace(format!("read_response_exact get null for request_id {}, method {}", id, method));
+            Logger::trace(format!("read_response_exact get null for request_id {}, method {}", id, method.as_ref()));
         }
         result
     }
