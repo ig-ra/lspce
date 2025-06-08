@@ -236,19 +236,27 @@ impl LspServer {
                     Message::Notification(r) => {
                         // cache diagnostics so they won't pour into Emacs
                         if r.method == "textDocument/publishDiagnostics" {
-                            let mut params = serde_json::from_value::<PublishDiagnosticsParams>(r.params).unwrap();
-
+                                Ok(params) => {
                             let uri_string: String = params.uri.into();
                             let mut file_info = FileInfo::new(&uri_string);
                             // cache no more than MAX_DIAGNOSTICS_COUNT diagnostics
                             let max_diagnostic_count = MAX_DIAGNOSTICS_COUNT.load(Ordering::Relaxed);
-                            if max_diagnostic_count >= 0 && params.diagnostics.len() > max_diagnostic_count as usize {
+                            match serde_json::from_value::<PublishDiagnosticsParams>(r.params) {
+                                    if max_diagnostic_count >= 0
+                                        && params.diagnostics.len() > max_diagnostic_count as usize
+                                    {
                                 params.diagnostics.truncate(max_diagnostic_count as usize);
                             }
                             file_info.diagnostics = params.diagnostics;
 
                             let mut server_data = server_data.lock().unwrap();
                             server_data.file_infos.insert(uri_string, file_info);
+                                }
+                                Err(e) => {
+                                    // parsing failed. Skip this notification
+                                    Logger::error(format!("Failed to parse PublishDiagnosticsParams: {}", e));
+                                }
+                            }
                         } else {
                             // other notifications
                             let mut server_data = server_data.lock().unwrap();
