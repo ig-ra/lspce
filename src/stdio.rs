@@ -155,17 +155,13 @@ pub(crate) fn stdio_transport(
         }
     });
 
-    let threads = IoThreads {
-        reader: reader_thread,
-        writer: writer_thread,
-    };
+    let threads = IoThreads { reader: reader_thread, writer: writer_thread };
     (sender_for_client, receiver_for_client, threads)
 }
 
 // Creates an IoThreads
 pub(crate) fn make_io_threads(
-    reader: thread::JoinHandle<io::Result<()>>,
-    writer: thread::JoinHandle<io::Result<()>>,
+    reader: thread::JoinHandle<io::Result<()>>, writer: thread::JoinHandle<io::Result<()>>,
 ) -> IoThreads {
     IoThreads { reader, writer }
 }
@@ -175,26 +171,43 @@ pub struct IoThreads {
     writer: thread::JoinHandle<io::Result<()>>,
 }
 
+fn join_thread(handle: thread::JoinHandle<io::Result<()>>, name: &str) -> Option<String> {
+    match handle.join() {
+        Ok(Ok(())) => None,
+        Ok(Err(e)) => {
+            let msg = format!("{name} thread error: {e}");
+            Logger::error(&msg);
+            Some(msg)
+        }
+        Err(e) => {
+            let msg = format!("{name} thread panicked: {:?}", e);
+            Logger::error(&msg);
+            Some(msg)
+        }
+    }
+}
+
 impl IoThreads {
     pub fn join(self) -> io::Result<()> {
         Logger::info("IoThreads join");
 
-        match self.reader.join() {
-            Ok(r) => r?,
-            Err(err) => {
-                println!("reader panicked!");
-                std::panic::panic_any(err)
+        let mut error_msg = String::new();
+
+        if let Some(e) = join_thread(self.reader, "reader") {
+            error_msg.push_str(&e);
+        }
+        if let Some(e) = join_thread(self.writer, "writer") {
+            if !error_msg.is_empty() {
+                error_msg.push_str("; ");
             }
-        };
-        match self.writer.join() {
-            Ok(r) => r,
-            Err(err) => {
-                println!("writer panicked!");
-                std::panic::panic_any(err);
-            }
-        };
+            error_msg.push_str(&e);
+        }
+
         Logger::info("IoThreads join finished.");
 
+        if !error_msg.is_empty() {
+            return Err(io::Error::new(io::ErrorKind::Other, error_msg));
+        }
         Ok(())
     }
 }
