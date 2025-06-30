@@ -694,7 +694,18 @@ fn initialize(env: &Env, server: &mut LspServer, req_str: &str, timeout: Duratio
     }
 }
 
-fn shutdown_server(mut server: LspServer, req: Request) {
+/// Shuts down LSP server:
+/// 1. Sends the shutdown request to the server and waits for a matching response.
+/// 2. Upon receiving the response, sends an 'exit' notification and tries to gracefully shut down the server.
+///    If server fails to gracefully shut itself down within the specified timeout it would be forcibly closed.
+/// 3. If the server does not respond within the specified timeout, escalates to a forced shutdown.
+///
+/// Note that this function will run in a background thread
+///
+/// # Arguments
+/// * `server` - The LspServer instance to shut down.
+/// * `req` - The shutdown request to send to the server.
+pub fn shutdown_server(mut server: LspServer, req: Request) -> Result<Option<ExitStatus>> {
     Logger::info(format!("start to shut down {}", server.name_id()));
 
     let req_id = req.id.clone();
@@ -708,30 +719,29 @@ fn shutdown_server(mut server: LspServer, req: Request) {
             Some(resp) if resp.id == req_id => {
                 let exit = Notification::new("exit", json!({}));
                 let _ = server.write(Message::Notification(exit));
-                server.shutdown(shutdown_timeout); // Graceful
-                return;
+                return server.shutdown(shutdown_timeout); // Graceful + forced, if needed
             }
             Some(_) => continue, // Ignore responses with non-matched id
             None => {
-                thread::sleep(Duration::from_millis(10));
+                thread::sleep(POLL_INTERVAL);
             }
         }
 
         if start_time.elapsed() > shutdown_timeout {
-            Logger::info(format!("Shutdown request for {} timed out. Forcing shutdown", server.name_id()));
-            server.shutdown(Duration::ZERO); // Forced
-            return;
+            Logger::info(format!("Graceful termination for {} timed out. Forcing shutdown", server.name_id()));
+            return server.shutdown(Duration::ZERO); // Forced
         }
     }
 }
 
+// Spans a thread to shut down the server to avoid blocking emacs while performing LSP shutdown sequence.
 #[defun_safe]
 #[defun]
 fn shutdown(env: &Env, root_uri: String, file_type: String, request: String) -> Result<Option<bool>> {
     with_project(env, &root_uri, None, |project| match project.servers.remove(&file_type) {
         Some(server) => {
             let req = serde_json::from_str::<Request>(&request).context("Failed to parse shutdown request JSON")?;
-            thread::spawn(move || shutdown_server(server, req));
+            std::thread::spawn(move || shutdown_server(server, req));
             Ok(Some(true))
         }
         None => {
