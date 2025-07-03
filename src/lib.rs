@@ -152,7 +152,11 @@ impl LspServer {
         let stderr = child.stderr.take().context("Failed to obtain LSP server's stderr")?;
 
         let (mut transport, mut transport_threads) = Connection::stdio(stdin, stdout, stderr);
-        let server_info = LspServerInfo::new(child.id());
+
+        let mut server_info = LspServerInfo::new(child.id());
+        if let Some(name) = std::path::Path::new(cmd).file_name().and_then(|n| n.to_str()) {
+            server_info.name = name.to_string();
+        }
 
         let mut server = LspServer {
             child: Some(child),
@@ -349,7 +353,7 @@ impl LspServer {
     }
 
     pub fn name_id(&self) -> String {
-        format!("{}({})", self.server_info.name, self.server_info.id)
+        format!("<{}:[{}]>", self.server_info.name, self.server_info.id)
     }
 
     pub fn stop_dispatcher(&mut self) {
