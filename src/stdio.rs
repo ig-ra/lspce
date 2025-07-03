@@ -21,10 +21,7 @@ use crate::{
 
 /// Creates an LSP connection via stdio.
 pub(crate) fn stdio_transport(
-    mut child_stdin: ChildStdin,
-    mut child_stdout: ChildStdout,
-    mut child_stderr: ChildStderr,
-    exit: Arc<Mutex<bool>>,
+    mut child_stdin: ChildStdin, mut child_stdout: ChildStdout, mut child_stderr: ChildStderr, exit: Arc<Mutex<bool>>,
 ) -> (Sender<Message>, Receiver<Message>, IoThreads) {
     let exit_writer = Arc::clone(&exit);
     let (sender_for_client, receiver_from_client) = bounded::<Message>(10);

@@ -193,10 +193,7 @@ impl Message {
             #[serde(flatten)]
             msg: Message,
         }
-        let text = serde_json::to_string(&JsonRpc {
-            jsonrpc: "2.0",
-            msg: self,
-        })?;
+        let text = serde_json::to_string(&JsonRpc { jsonrpc: "2.0", msg: self })?;
         // Logger::log(&format!("Message::_write {}", &text));
         write_msg_text(w, &text)
     }
@@ -213,18 +210,8 @@ impl Response {
         }
     }
     pub fn new_err(id: RequestId, code: i32, message: String) -> Response {
-        let error = ResponseError {
-            code,
-            message,
-            data: None,
-        };
-        Response {
-            id,
-            result: None,
-            error: Some(error),
-            content: "".to_string(),
-            request_tick: "".to_string(),
-        }
+        let error = ResponseError { code, message, data: None };
+        Response { id, result: None, error: Some(error), content: "".to_string(), request_tick: "".to_string() }
     }
 }
 
@@ -238,16 +225,10 @@ impl Request {
             request_tick: None,
         }
     }
-    pub fn extract<P: DeserializeOwned>(
-        self,
-        method: &str,
-    ) -> Result<(RequestId, P), ExtractError<Request>> {
+    pub fn extract<P: DeserializeOwned>(self, method: &str) -> Result<(RequestId, P), ExtractError<Request>> {
         if self.method == method {
-            let params =
-                serde_json::from_value(self.params).map_err(|error| ExtractError::JsonError {
-                    method: self.method,
-                    error,
-                })?;
+            let params = serde_json::from_value(self.params)
+                .map_err(|error| ExtractError::JsonError { method: self.method, error })?;
             Ok((self.id, params))
         } else {
             Err(ExtractError::MethodMismatch(self))
@@ -266,15 +247,9 @@ impl Notification {
     pub fn new(method: impl Into<String>, params: impl Serialize) -> Notification {
         Notification { method: method.into(), params: serde_json::to_value(params).unwrap(), content: "".to_string() }
     }
-    pub fn extract<P: DeserializeOwned>(
-        self,
-        method: &str,
-    ) -> Result<P, ExtractError<Notification>> {
+    pub fn extract<P: DeserializeOwned>(self, method: &str) -> Result<P, ExtractError<Notification>> {
         if self.method == method {
-            serde_json::from_value(self.params).map_err(|error| ExtractError::JsonError {
-                method: self.method,
-                error,
-            })
+            serde_json::from_value(self.params).map_err(|error| ExtractError::JsonError { method: self.method, error })
         } else {
             Err(ExtractError::MethodMismatch(self))
         }
@@ -311,9 +286,7 @@ fn read_msg_text(inp: &mut dyn BufRead) -> io::Result<Option<String>> {
         }
         let mut parts = buf.splitn(2, ": ");
         let header_name = parts.next().unwrap();
-        let header_value = parts
-            .next()
-            .ok_or_else(|| invalid_data!("malformed header: {:?}", buf))?;
+        let header_value = parts.next().ok_or_else(|| invalid_data!("malformed header: {:?}", buf))?;
         if header_name == "Content-Length" {
             size = Some(header_value.parse::<usize>().map_err(invalid_data)?);
         }
@@ -343,9 +316,7 @@ mod tests {
         let text = "{\"jsonrpc\": \"2.0\",\"id\": 3,\"method\": \"shutdown\", \"params\": null }";
         let msg: Message = serde_json::from_str(text).unwrap();
 
-        assert!(
-            matches!(msg, Message::Request(req) if req.id == 3.into() && req.method == "shutdown")
-        );
+        assert!(matches!(msg, Message::Request(req) if req.id == 3.into() && req.method == "shutdown"));
     }
 
     #[test]
@@ -353,9 +324,7 @@ mod tests {
         let text = "{\"jsonrpc\": \"2.0\",\"id\": 3,\"method\": \"shutdown\"}";
         let msg: Message = serde_json::from_str(text).unwrap();
 
-        assert!(
-            matches!(msg, Message::Request(req) if req.id == 3.into() && req.method == "shutdown")
-        );
+        assert!(matches!(msg, Message::Request(req) if req.id == 3.into() && req.method == "shutdown"));
     }
 
     #[test]
