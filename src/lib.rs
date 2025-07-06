@@ -706,9 +706,11 @@ pub fn initialize(env: &Env, server: &mut LspServer, req: Request, timeout: Dura
 /// * `server` - The LspServer instance to shut down.
 /// * `req` - The shutdown request to send to the server.
 pub fn shutdown_server(mut server: LspServer, req: Request) -> Result<Option<ExitStatus>> {
-    Logger::info(format!("start to shut down {}", server.name_id()));
+    let name_id = server.name_id();
+    Logger::info(format!("request to shutdown {}", name_id));
 
     let req_id = req.id.clone();
+    Logger::debug(format!("sent shutdown request for {}: {:?}", name_id, req));
     let _ = _request_async(&mut server, req);
 
     let start_time = Instant::now();
@@ -728,7 +730,7 @@ pub fn shutdown_server(mut server: LspServer, req: Request) -> Result<Option<Exi
         }
 
         if start_time.elapsed() > shutdown_timeout {
-            Logger::info(format!("Graceful termination for {} timed out. Forcing shutdown", server.name_id()));
+            Logger::info(format!("Graceful termination for {} timed out. Forcing shutdown", name_id));
             return server.shutdown(Duration::ZERO); // Forced
         }
     }
