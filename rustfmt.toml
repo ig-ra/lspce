@@ -1,0 +1,25 @@
+#use_small_heuristics = "Max"
+use_small_heuristics = "Default"
+max_width = 120
+brace_style = "PreferSameLine"
+
+# Prevents function arguments from being split into multiple lines
+fn_params_layout = "Compressed"
+fn_args_layout = "Compressed"
+
+# Sets the maximum width of a function signature before falling back to vertical formatting
+fn_args_density = "Compressed"
+
+# Sets the maximum width of a function call before falling back to vertical formatting
+fn_call_width = 120
+
+# Width threshold for struct literals before falling back to vertical formatting
+struct_lit_width = 120
+
+# Width threshold for method chains before falling back to vertical formatting
+chain_width = 120
+
+# Sets the maximum width of a function definition before falling back to vertical formatting
+fn_single_line = true
+
+indent_style = "Block"
