@@ -10,7 +10,7 @@ crate-type = ["cdylib", "rlib"]
 
 [dependencies]
 lspce-macros = { path = "lspce-macros" }
-lsp-types = "0.95.0"
+lsp-types = "0.97.0"
 crossbeam-channel = "0.5.4"
 chrono = "0.4"
 emacs = "0.19.0"
