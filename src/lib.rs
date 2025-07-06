@@ -622,8 +622,8 @@ where
 #[defun_safe]
 #[defun]
 fn connect(
-    env: &Env, root_uri: String, lsp_type: String, cmd: String, cmd_args: String, initialize_req: String, timeout: i32,
-    emacs_envs: String,
+    env: &Env, root_uri: String, lsp_type: String, cmd: String, cmd_args: String, initialize_req_str: String,
+    timeout: i32, emacs_envs: String,
 ) -> Result<Option<String>> {
     let prj_name_type = format!("{}({})", root_uri, lsp_type);
     Logger::info(format!("Creating and initializing LSP server for {}", prj_name_type));
@@ -640,9 +640,11 @@ fn connect(
     let mut server = LspServer::new(&cmd, &cmd_args, &emacs_envs)
         .with_context(|| format!("Failed to create LSP server for {}, <{} {}>", prj_name_type, cmd, cmd_args))?;
 
-    initialize(env, &mut server, &initialize_req, Duration::from_secs(timeout.max(0) as u64))
+    Logger::debug(format!("raw initialize request {:#?}", initialize_req_str));
+    let req: Request = serde_json::from_str(&initialize_req_str).context("Failed to parse initialize request JSON")?;
+    initialize(env, &mut server, req, Duration::from_secs(timeout.max(0) as u64))
         .inspect_err(|_| {
-            let _ = server.kill_child();
+            let _ = server.shutdown(Duration::ZERO); // forcibly kill server and join threads
         })
         .with_context(|| format!("Failed to initialize LSP server for {}", prj_name_type))?;
 
@@ -655,13 +657,9 @@ fn connect(
     Ok(Some(serde_json::to_string(&server_info)?))
 }
 
-fn initialize(env: &Env, server: &mut LspServer, req_str: &str, timeout: Duration) -> Result<()> {
-    Logger::debug(format!("raw initialize request {:#?}", req_str));
-
-    let msg: Request = serde_json::from_str(&req_str).context("Failed to parse initialize request JSON")?;
-    Logger::info(format!("initialize request {}", serde_json::to_string_pretty(&msg)?));
-
-    _request_async(server, msg)?;
+pub fn initialize(env: &Env, server: &mut LspServer, req: Request, timeout: Duration) -> Result<()> {
+    Logger::info(format!("initialize request {}", serde_json::to_string_pretty(&req)?));
+    _request_async(server, req)?;
 
     let start_time = Instant::now();
     loop {
