@@ -436,17 +436,15 @@ impl LspServer {
     /// * `Err(e)` if an error occurred during shutdown.
     pub fn shutdown(&mut self, graceful_timeout: Duration) -> Result<Option<ExitStatus>> {
         let name_id = self.name_id();
-        Logger::debug(format!("start shutdown sequence for {}", name_id));
+        Logger::debug(format!("begin shutdown sequence for {}", name_id));
 
         self.stop_dispatcher();
         self.exit_transport();
         Logger::debug(format!("after stopping transport and dispatcher for {}", name_id));
 
-        self.join_threads();
-        Logger::debug(format!("after joining transport and dispatcher threads for {}", name_id));
-
+        let mut status = Ok(None);
         if let Some(mut child) = self.child.take() {
-            // Try graceful shutdown
+            // Try graceful shutdown first
             if graceful_timeout > Duration::ZERO {
                 Logger::debug(format!("attempting graceful shutdown for {}", name_id));
                 status = Self::wait_child_with_timeout(&mut child, graceful_timeout, &name_id, "graceful shutdown");
