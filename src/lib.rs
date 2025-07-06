@@ -78,7 +78,7 @@ const SERVER_STATUS_EXITING: u8 = 3;
 
 const POLL_INTERVAL: Duration = Duration::from_millis(10);
 const GRACEFUL_SHUTDOWN_TIMEOUT: Duration = Duration::from_secs(3);
-const KILL_WAIT_TIMEOUT: Duration = Duration::from_secs(3);
+const KILL_WAIT_TIMEOUT: Duration = GRACEFUL_SHUTDOWN_TIMEOUT;
 const MAX_NOTIFICATIONS: usize = 10;
 const DISPATCHER_SLEEP: Duration = Duration::from_millis(1);
 
