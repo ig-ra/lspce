@@ -19,6 +19,24 @@ use crate::{
     logger::Logger,
 };
 
+/// Checks if thread should exit based on exit flag. Returns true if thread should exit.
+fn should_exit(exit_flag: &Arc<Mutex<bool>>, thread_name: &str) -> bool {
+    match exit_flag.lock() {
+        Ok(exit) => {
+            if *exit {
+                Logger::info(&format!("[LSP {}] thread requested to exit", thread_name));
+                return true;
+            }
+            return false;
+        }
+        Err(e) => {
+            Logger::error(&format!("[LSP {}] lock error: {}", thread_name, e));
+            return true; // Always break on lock error
+        }
+    }
+    false
+}
+
 /// Creates an LSP connection via stdio.
 pub(crate) fn stdio_transport(
     mut child_stdin: ChildStdin, mut child_stdout: ChildStdout, mut child_stderr: ChildStderr, exit: Arc<Mutex<bool>>,
@@ -29,16 +47,8 @@ pub(crate) fn stdio_transport(
         let mut stdin = child_stdin;
         loop {
             {
-                match exit_writer.lock() {
-                    Ok(exit) => {
-                        if *exit {
-                            Logger::info("stdio writer_thread exited normally.");
-                            break;
-                        }
-                    }
-                    Err(e) => {
-                        Logger::error(&format!("stdio writer_thread exit error {}", e));
-                    }
+                if should_exit(&exit_writer, "stdout") {
+                    break;
                 }
             }
             let recv_value = receiver_from_client.recv_timeout(std::time::Duration::from_millis(1));
@@ -65,16 +75,8 @@ pub(crate) fn stdio_transport(
 
         loop {
             {
-                match exit_reader.lock() {
-                    Ok(exit) => {
-                        if *exit {
-                            Logger::info("stdio reader_thread exited normally.");
-                            break;
-                        }
-                    }
-                    Err(e) => {
-                        Logger::error(&format!("stdio reader_thread exit error {}", e));
-                    }
+                if should_exit(&exit_reader, "stdin") {
+                    break;
                 }
             }
             match Message::read(&mut reader) {
@@ -124,16 +126,8 @@ pub(crate) fn stdio_transport(
         let mut buffer = String::new();
         loop {
             {
-                match exit_stderr.lock() {
-                    Ok(exit) => {
-                        if *exit {
-                            Logger::info(&format!("stdio stderr_thread exited normally."));
-                            break;
-                        }
-                    }
-                    Err(e) => {
-                        Logger::error(&format!("stdio stderr_thread error {}", e));
-                    }                    
+                if should_exit(&exit_stderr, "stderr") {
+                    break;
                 }
             }
 
