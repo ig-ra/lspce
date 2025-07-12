@@ -5,7 +5,10 @@ use std::{
     io::{self, stdin, stdout},
     ops::ControlFlow,
     process::{ChildStderr, ChildStdin, ChildStdout},
-    sync::{Arc, Mutex},
+    sync::{
+        atomic::{AtomicBool, Ordering},
+        Arc,
+    },
     thread,
 };
 
@@ -19,27 +22,18 @@ use crate::{
     logger::Logger,
 };
 
-/// Checks if thread should exit based on exit flag. Returns true if thread should exit.
-fn should_exit(exit_flag: &Arc<Mutex<bool>>, thread_name: &str) -> bool {
-    match exit_flag.lock() {
-        Ok(exit) => {
-            if *exit {
-                Logger::info(&format!("[LSP {}] thread requested to exit", thread_name));
-                return true;
-            }
-            return false;
-        }
-        Err(e) => {
-            Logger::error(&format!("[LSP {}] lock error: {}", thread_name, e));
-            return true; // Always break on lock error
-        }
+/// Checks if thread should exit based on exit flag
+fn should_exit(exit_flag: &Arc<AtomicBool>, thread_name: &str) -> bool {
+    let exit = exit_flag.load(Ordering::Relaxed);
+    if exit {
+        Logger::info(&format!("[LSP {}] thread requested to exit", thread_name));
     }
-    false
+    exit
 }
 
 /// Creates an LSP connection via stdio.
 pub(crate) fn stdio_transport(
-    mut child_stdin: ChildStdin, mut child_stdout: ChildStdout, mut child_stderr: ChildStderr, exit: Arc<Mutex<bool>>,
+    mut child_stdin: ChildStdin, mut child_stdout: ChildStdout, mut child_stderr: ChildStderr, exit: Arc<AtomicBool>,
 ) -> (Sender<Message>, Receiver<Message>, IoThreads) {
     let exit_writer = Arc::clone(&exit);
     let (sender_for_client, receiver_from_client) = bounded::<Message>(10);

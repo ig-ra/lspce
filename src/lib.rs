@@ -28,9 +28,7 @@ use serde_json::json;
 use std::panic::Location;
 use std::result::Result as RustResult;
 
-use std::sync::atomic::AtomicI32;
-use std::sync::atomic::AtomicU8;
-use std::sync::atomic::Ordering;
+use std::sync::atomic::{AtomicBool, AtomicI32, AtomicU8, Ordering};
 use std::time::{Duration, Instant};
 use stdio::IoThreads;
 
@@ -125,7 +123,7 @@ struct LspServer {
     transport_threads: Option<IoThreads>,
     dispatcher: Option<thread::JoinHandle<()>>,
     server_data: Arc<Mutex<LspServerData>>,
-    exit: Arc<Mutex<bool>>,
+    exit: Arc<AtomicBool>,
 }
 
 impl LspServer {
@@ -166,7 +164,7 @@ impl LspServer {
             transport_threads: Some(transport_threads),
             dispatcher: None,
             server_data: Arc::new(Mutex::new(LspServerData::new())),
-            exit: Arc::new(Mutex::new(false)),
+            exit: Arc::new(AtomicBool::new(false)),
         };
 
         server.dispatcher = Some(LspServer::start_dispatcher(
@@ -178,14 +176,11 @@ impl LspServer {
     }
 
     fn start_dispatcher(
-        transport: Arc<Mutex<Option<Connection>>>, exit: Arc<Mutex<bool>>, server_data: Arc<Mutex<LspServerData>>,
+        transport: Arc<Mutex<Option<Connection>>>, exit: Arc<AtomicBool>, server_data: Arc<Mutex<LspServerData>>,
     ) -> thread::JoinHandle<()> {
         let handle = thread::spawn(move || loop {
-            {
-                let exit = exit.lock().unwrap();
-                if *exit {
-                    break;
-                }
+            if exit.load(Ordering::Relaxed) {
+                break;
             }
 
             let mut message: Option<Message> = None;
@@ -357,8 +352,7 @@ impl LspServer {
     }
 
     pub fn stop_dispatcher(&mut self) {
-        let mut exit = self.exit.lock().unwrap();
-        *exit = true;
+        self.exit.store(true, Ordering::Relaxed);
     }
 
     pub fn exit_transport(&self) {
