@@ -13,7 +13,7 @@ mod tests;
 use anyhow::{anyhow, bail, Context};
 use connection::Connection;
 use emacs::{defun, Env, IntoLisp, Result, Value};
-use logger::{Logger, LOG_DEBUG, LOG_DISABLED, LOG_FILE_NAME, LOG_LEVEL};
+use logger::Logger;
 use lspce_macros::defun_safe;
 
 use lsp_types::{
@@ -511,34 +511,33 @@ fn read_max_diagnostics_count(env: &Env) -> Result<i32> {
 /// disable logging to /tmp/lspce.log
 #[defun]
 fn disable_logging(env: &Env) -> Result<Value<'_>> {
-    LOG_LEVEL.store(LOG_DISABLED, Ordering::Relaxed);
+    logger::disable_logging();
     env.lspce_message("Logging is disabled")
 }
 
 /// enable logging to /tmp/lspce.log
 #[defun]
 fn enable_logging(env: &Env) -> Result<Value<'_>> {
-    LOG_LEVEL.store(LOG_DEBUG, Ordering::Relaxed);
+    logger::enable_logging();
     env.lspce_message("Logging is enabled")
 }
 
 #[defun]
 fn set_log_level(env: &Env, level: u8) -> Result<Value<'_>> {
-    LOG_LEVEL.store(level, Ordering::Relaxed);
+    logger::set_log_level(level);
     env.lspce_message(format!("Set log level to {}", level))
 }
 
 #[defun]
 fn get_log_level(env: &Env) -> Result<u8> {
-    let log_level = LOG_LEVEL.load(Ordering::Relaxed);
-    return Ok(log_level);
+    Ok(logger::get_log_level())
 }
 
 /// set logging file name
 #[defun]
 fn set_log_file(env: &Env, file: String) -> Result<Value<'_>> {
     let message = format!("Set logging file to {}", file);
-    *LOG_FILE_NAME.lock().unwrap() = file;
+    logger::set_log_file_name(file);
     env.lspce_message(message)
 }
 

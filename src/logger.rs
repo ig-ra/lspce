@@ -23,8 +23,27 @@ pub fn log_enabled(level: u8) -> bool {
     LOG_LEVEL.load(Ordering::Relaxed) >= level
 }
 
+pub fn enable_logging() {
+    LOG_LEVEL.store(LOG_DEBUG, Ordering::Relaxed);
+}
+pub fn disable_logging() {
+    LOG_LEVEL.store(LOG_DISABLED, Ordering::Relaxed);
+}
+
 pub fn log_file_name() -> String {
     LOG_FILE_NAME.lock().unwrap().clone()
+}
+
+pub fn set_log_file_name(file_name: String) {
+    *LOG_FILE_NAME.lock().unwrap() = file_name;
+}
+
+pub fn set_log_level(level: u8) {
+    LOG_LEVEL.store(level, Ordering::Relaxed);
+}
+
+pub fn get_log_level() -> u8 {
+    LOG_LEVEL.load(Ordering::Relaxed)
 }
 
 pub struct Logger {}
