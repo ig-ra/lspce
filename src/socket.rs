@@ -27,7 +27,7 @@ pub(crate) fn socket_transport(
     let exit_writer = Arc::clone(&exit);
     let (writer_sender, writer) = make_writer(stream.try_clone().unwrap(), exit_writer);
 
-    let io_threads = make_io_threads(reader, writer);
+    let io_threads = make_io_threads(reader, writer, None);
     (writer_sender, reader_receiver, io_threads)
 }
 

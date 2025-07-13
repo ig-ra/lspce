@@ -114,7 +114,7 @@ pub(crate) fn stdio_transport(
     });
 
     let exit_stderr = Arc::clone(&exit);
-    let stderr_thread = thread::spawn(move || {
+    let stderr_thread = thread::spawn(move || -> io::Result<()> {
         let mut stderr = child_stderr;
         let mut reader = std::io::BufReader::new(stderr);
         let mut buffer = String::new();
@@ -128,32 +128,39 @@ pub(crate) fn stdio_transport(
             buffer.clear();
             match reader.read_line(&mut buffer) {
                 Ok(0) => {
-                    // Logger::error(&format!("stderr reach EOF"));
-                },
-                Ok(n) => {
-                    Logger::error(&format!("[stderr] {}", &buffer));
-                },
+                    Logger::error("[LSP stderr] stderr closed");
+                    break;
+                }
+                Ok(_) => {
+                    Logger::error(&format!("[LSP stderr] {}", &buffer.trim_end()));
+                }
                 Err(e) => {
-                    Logger::error(&format!("stderr read error {}", e));
-                },
+                    if e.kind() != std::io::ErrorKind::Interrupted {
+                        Logger::error(&format!("[LSP stderr] read error: {}", e));
+                        return Err(e); // Exit on unrecoverable errors
+                    }
+                }
             }
         }
+        Ok(())
     });
 
-    let threads = IoThreads { reader: reader_thread, writer: writer_thread };
+    let threads = make_io_threads(reader_thread, writer_thread, Some(stderr_thread));
     (sender_for_client, receiver_for_client, threads)
 }
 
 // Creates an IoThreads
 pub(crate) fn make_io_threads(
     reader: thread::JoinHandle<io::Result<()>>, writer: thread::JoinHandle<io::Result<()>>,
+    stderr: Option<thread::JoinHandle<io::Result<()>>>,
 ) -> IoThreads {
-    IoThreads { reader, writer }
+    IoThreads { reader, writer, stderr }
 }
 
 pub struct IoThreads {
     reader: thread::JoinHandle<io::Result<()>>,
     writer: thread::JoinHandle<io::Result<()>>,
+    stderr: Option<thread::JoinHandle<io::Result<()>>>, // only when stdio
 }
 
 fn join_thread(handle: thread::JoinHandle<io::Result<()>>, name: &str) -> Option<String> {
@@ -176,22 +183,19 @@ impl IoThreads {
     pub fn join(self) -> io::Result<()> {
         Logger::info("IoThreads join");
 
-        let mut error_msg = String::new();
-
-        if let Some(e) = join_thread(self.reader, "reader") {
-            error_msg.push_str(&e);
-        }
-        if let Some(e) = join_thread(self.writer, "writer") {
-            if !error_msg.is_empty() {
-                error_msg.push_str("; ");
-            }
-            error_msg.push_str(&e);
-        }
+        let errors: Vec<String> = [
+            join_thread(self.reader, "reader"),
+            join_thread(self.writer, "writer"),
+            self.stderr.and_then(|h| join_thread(h, "stderr")),
+        ]
+        .into_iter()
+        .flatten()
+        .collect();
 
         Logger::info("IoThreads join finished.");
 
-        if !error_msg.is_empty() {
-            return Err(io::Error::new(io::ErrorKind::Other, error_msg));
+        if !errors.is_empty() {
+            return Err(io::Error::new(io::ErrorKind::Other, errors.join("; ")));
         }
         Ok(())
     }
