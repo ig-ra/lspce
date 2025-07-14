@@ -79,3 +79,74 @@ mod tests {
         }
     }
 }
+
+// handy for manual testing and to see log messages
+pub fn setup_test_logger() {
+    #[cfg(unix)]
+    logger::set_log_file_name("/dev/stderr".to_string());
+
+    logger::enable_logging();
+}
+
+#[cfg(test)]
+mod shutdown_lspserver {
+    use super::*;
+    use std::thread;
+    use std::time::Duration;
+
+    fn make_test_server(cmd: &str, args: &str) -> LspServer {
+        let mut server = LspServer::new(cmd, args, "{}").expect("should create test server");
+        server.status = SERVER_STATUS_RUNNING;
+        server
+    }
+
+    fn assert_shutdown_state(server: &LspServer) {
+        assert!(server.dispatcher.is_none(), "Dispatcher should be None after shutdown");
+        assert!(server.transport_threads.is_none(), "Transport threads should be None after shutdown");
+        assert!(server.child.is_none(), "Child should be None after shutdown");
+    }
+
+    fn assert_shutdown_idempotent(mut server: LspServer, timeout: Duration, desc: &str, expect_some: bool) {
+        // First shutdown
+        let result = server.shutdown(timeout);
+        assert!(result.is_ok(), "{desc}: first shutdown should succeed");
+        if expect_some {
+            assert!(matches!(result.unwrap(), Some(_)), "{desc}: first shutdown should return Some(exit_status)");
+        }
+        assert_shutdown_state(&server);
+
+        // Second shutdown (idempotency)
+
+        // disable logging to avoid duplicated messages and noise in idenpotent tests
+        let level = logger::get_log_level();
+        logger::disable_logging();
+
+        let result2 = server.shutdown(timeout);
+        assert!(result2.is_ok(), "{desc}: second shutdown should not panic");
+        assert!(result2.unwrap().is_none(), "{desc}: second shutdown should return None");
+        assert_shutdown_state(&server);
+
+        logger::set_log_level(level); // reenable
+    }
+
+    #[test]
+    fn test_graceful_shutdown() {
+        //setup_test_logger();
+        let server = make_test_server("true", "");
+        assert_shutdown_idempotent(server, Duration::from_secs(2), "graceful", true);
+    }
+
+    #[test]
+    fn test_forced_shutdown() {
+        //setup_test_logger();
+        let server = make_test_server("sleep", "5");
+        assert_shutdown_idempotent(server, Duration::ZERO, "forced", false);
+    }
+
+    #[test]
+    fn test_graceful_escalates_to_forced_shutdown() {
+        //setup_test_logger();
+        let server = make_test_server("sleep", "5");
+        assert_shutdown_idempotent(server, Duration::from_millis(100), "graceful escalates to forced", false);
+    }
+}
