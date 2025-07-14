@@ -2,7 +2,7 @@
 
 mod connection;
 mod error;
-mod logger;
+pub mod logger;
 mod msg;
 mod socket;
 mod stdio;
@@ -20,7 +20,8 @@ use lsp_types::{
     Diagnostic, DidChangeTextDocumentParams, InitializeResult, InitializedParams, PublishDiagnosticsParams,
     VersionedTextDocumentIdentifier,
 };
-use msg::{Message, Notification, Request, RequestId, Response};
+pub use msg::{Message, Request, RequestId};
+use msg::{Notification, Response};
 use serde::de::DeserializeOwned;
 use serde::{Deserialize, Serialize};
 use serde_json::json;
@@ -56,7 +57,7 @@ impl FileInfo {
 }
 
 #[derive(Serialize, Deserialize, Debug, Clone)]
-struct LspServerInfo {
+pub struct LspServerInfo {
     pub name: String,
     pub version: String,
     pub id: String, // server_id at the moment
@@ -115,7 +116,7 @@ impl LspServerData {
 /// - Server information (name, version, capabilities)
 /// - Connection state and transport threads
 /// - Server data and exit flag
-struct LspServer {
+pub struct LspServer {
     pub child: Option<Child>,
     pub server_info: LspServerInfo,
     pub status: u8,
