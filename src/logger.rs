@@ -7,7 +7,7 @@ use std::{
     },
 };
 
-use chrono::Local;
+use time::{macros::format_description, OffsetDateTime};
 
 pub const LOG_DISABLED: u8 = 0;
 pub const LOG_ERROR: u8 = 1;
@@ -51,9 +51,18 @@ pub struct Logger {}
 impl Logger {
     fn log(buf: impl AsRef<str>) {
         let mut logger = logger().lock().unwrap();
-        logger.write_all(Local::now().format("%Y-%m-%d %H:%M:%S%.3f - ").to_string().as_bytes());
+
+        // const/compile-time format string
+        const FORMAT: &[time::format_description::FormatItem] =
+            format_description!("[year]-[month]-[day] [hour]:[minute]:[second].[subsecond digits:3] - ");
+
+        let now = OffsetDateTime::now_local().unwrap_or_else(|_| OffsetDateTime::now_utc());
+        let timestamp = now.format(&FORMAT).unwrap_or_else(|_| "timestamp-error - ".to_string());
+
+        logger.write_all(timestamp.as_bytes());
         logger.write_all(buf.as_ref().as_bytes());
-        logger.write_all("\n".as_bytes());
+        logger.write_all(b"\n");
+        logger.flush();
     }
 
     fn log_if_enabled(level: u8, buf: impl AsRef<str>) {
