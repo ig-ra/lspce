@@ -57,12 +57,11 @@ impl Logger {
             format_description!("[year]-[month]-[day] [hour]:[minute]:[second].[subsecond digits:3] - ");
 
         let now = OffsetDateTime::now_local().unwrap_or_else(|_| OffsetDateTime::now_utc());
-        let timestamp = now.format(&FORMAT).unwrap_or_else(|_| "timestamp-error - ".to_string());
+        let timestamp = now.format(&FORMAT).unwrap_or_else(|_| String::new());
 
-        logger.write_all(timestamp.as_bytes());
-        logger.write_all(buf.as_ref().as_bytes());
-        logger.write_all(b"\n");
-        logger.flush();
+        let message = format!("{}{}\n", timestamp, buf.as_ref());
+        let _ = logger.write_all(message.as_bytes());
+        let _ = logger.flush();
     }
 
     fn log_if_enabled(level: u8, buf: impl AsRef<str>) {
