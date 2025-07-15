@@ -8,7 +8,7 @@ use bytes::Buf;
 use bytes::BytesMut;
 use serde::{de::DeserializeOwned, Deserialize, Serialize};
 
-use crate::{error::ExtractError, logger::Logger};
+use crate::error::ExtractError;
 
 #[derive(Serialize, Deserialize, Debug, Clone)]
 #[serde(untagged)]
@@ -158,6 +158,22 @@ pub struct Notification {
 }
 
 impl Message {
+    pub fn content(&self) -> &str {
+        match self {
+            Message::Request(req) => &req.content,
+            Message::Response(resp) => &resp.content,
+            Message::Notification(notif) => &notif.content,
+        }
+    }
+
+    fn set_content(&mut self, content: String) {
+        match self {
+            Message::Request(req) => req.content = content,
+            Message::Response(resp) => resp.content = content,
+            Message::Notification(notif) => notif.content = content,
+        }
+    }
+
     pub fn read(r: &mut impl BufRead) -> io::Result<Option<Message>> {
         Message::_read(r)
     }
@@ -166,22 +182,9 @@ impl Message {
             None => return Ok(None),
             Some(text) => text,
         };
-        // Logger::log(&format!("Message::_read {}", &text));
-        let msg = serde_json::from_str::<Message>(&text)?;
-        match msg {
-            Message::Request(mut r) => {
-                r.content = text;
-                Ok(Some(Message::Request(r)))
-            }
-            Message::Response(mut r) => {
-                r.content = text;
-                Ok(Some(Message::Response(r)))
-            }
-            Message::Notification(mut r) => {
-                r.content = text;
-                Ok(Some(Message::Notification(r)))
-            }
-        }
+        let mut msg = serde_json::from_str::<Message>(&text)?;
+        msg.set_content(text);
+        Ok(Some(msg))
     }
     pub fn write(self, w: &mut impl Write) -> io::Result<()> {
         self._write(w)
@@ -194,8 +197,28 @@ impl Message {
             msg: Message,
         }
         let text = serde_json::to_string(&JsonRpc { jsonrpc: "2.0", msg: self })?;
-        // Logger::log(&format!("Message::_write {}", &text));
         write_msg_text(w, &text)
+    }
+}
+
+impl fmt::Display for Message {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        let msg_type = match self {
+            Message::Request(_) => "request",
+            Message::Response(_) => "response",
+            Message::Notification(_) => "notification",
+        };
+
+        match serde_json::to_string_pretty(self) {
+            Ok(pretty) => write!(f, "{} {}", msg_type, pretty),
+            Err(e) => {
+                if self.content().is_empty() {
+                    write!(f, "{} {}", msg_type, e) // writer. failed seriallization in our constructed message
+                } else {
+                    write!(f, "{} {} - {}", msg_type, e, self.content()) // reader. failed in desirialization
+                }
+            }
+        }
     }
 }
 
