@@ -71,46 +71,6 @@ impl fmt::Display for RequestId {
     }
 }
 
-#[derive(Debug, Serialize, Deserialize, Clone)]
-pub struct Request {
-    pub id: RequestId,
-    pub method: String,
-    #[serde(default = "serde_json::Value::default")]
-    #[serde(skip_serializing_if = "serde_json::Value::is_null")]
-    pub params: serde_json::Value,
-    #[serde(skip)]
-    pub content: String,
-    #[serde(skip)]
-    pub request_tick: Option<String>,
-}
-
-#[derive(Debug, Serialize, Deserialize, Clone)]
-pub struct Response {
-    // JSON RPC allows this to be null if it was impossible
-    // to decode the request's id. Ignore this special case
-    // and just die horribly.
-    pub id: RequestId,
-
-    // serde will treat identically both missing field and explicit null
-    // e.g. receiving no result and "result": null will result in None
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub result: Option<serde_json::Value>,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub error: Option<ResponseError>,
-    #[serde(skip)]
-    pub content: String,
-    #[serde(skip)]
-    pub request_tick: String,
-}
-
-#[derive(Debug, Serialize, Deserialize, Clone, PartialEq)]
-pub struct ResponseError {
-    pub code: i32,
-    pub message: String,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub data: Option<serde_json::Value>,
-}
-
 #[derive(Clone, Copy, Debug)]
 #[allow(unused)]
 pub enum ErrorCode {
@@ -149,6 +109,46 @@ pub enum ErrorCode {
     ///
     /// @since 3.17.0
     ServerCancelled = -32802,
+}
+
+#[derive(Debug, Serialize, Deserialize, Clone)]
+pub struct Request {
+    pub id: RequestId,
+    pub method: String,
+    #[serde(default = "serde_json::Value::default")]
+    #[serde(skip_serializing_if = "serde_json::Value::is_null")]
+    pub params: serde_json::Value,
+    #[serde(skip)]
+    pub content: String,
+    #[serde(skip)]
+    pub request_tick: Option<String>,
+}
+
+#[derive(Debug, Serialize, Deserialize, Clone)]
+pub struct Response {
+    // JSON RPC allows this to be null if it was impossible
+    // to decode the request's id. Ignore this special case
+    // and just die horribly.
+    pub id: RequestId,
+
+    // serde will treat identically both missing field and explicit null
+    // e.g. receiving no result and "result": null will result in None
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub result: Option<serde_json::Value>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub error: Option<ResponseError>,
+    #[serde(skip)]
+    pub content: String,
+    #[serde(skip)]
+    pub request_tick: String,
+}
+
+#[derive(Debug, Serialize, Deserialize, Clone, PartialEq)]
+pub struct ResponseError {
+    pub code: i32,
+    pub message: String,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub data: Option<serde_json::Value>,
 }
 
 #[derive(Debug, Serialize, Deserialize, Clone)]
