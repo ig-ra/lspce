@@ -89,6 +89,9 @@ pub struct Response {
     // to decode the request's id. Ignore this special case
     // and just die horribly.
     pub id: RequestId,
+
+    // serde will treat identically both missing field and explicit null
+    // e.g. receiving no result and "result": null will result in None
     #[serde(skip_serializing_if = "Option::is_none")]
     pub result: Option<serde_json::Value>,
     #[serde(skip_serializing_if = "Option::is_none")]
@@ -99,7 +102,7 @@ pub struct Response {
     pub request_tick: String,
 }
 
-#[derive(Debug, Serialize, Deserialize, Clone)]
+#[derive(Debug, Serialize, Deserialize, Clone, PartialEq)]
 pub struct ResponseError {
     pub code: i32,
     pub message: String,
@@ -332,39 +335,7 @@ fn write_msg_text(out: &mut dyn Write, msg: &str) -> io::Result<()> {
 
 #[cfg(test)]
 mod tests {
-    use super::{Message, Notification, Request, RequestId};
-
-    #[test]
-    fn shutdown_with_explicit_null() {
-        let text = "{\"jsonrpc\": \"2.0\",\"id\": 3,\"method\": \"shutdown\", \"params\": null }";
-        let msg: Message = serde_json::from_str(text).unwrap();
-
-        assert!(matches!(msg, Message::Request(req) if req.id == 3.into() && req.method == "shutdown"));
-    }
-
-    #[test]
-    fn shutdown_with_no_params() {
-        let text = "{\"jsonrpc\": \"2.0\",\"id\": 3,\"method\": \"shutdown\"}";
-        let msg: Message = serde_json::from_str(text).unwrap();
-
-        assert!(matches!(msg, Message::Request(req) if req.id == 3.into() && req.method == "shutdown"));
-    }
-
-    #[test]
-    fn notification_with_explicit_null() {
-        let text = "{\"jsonrpc\": \"2.0\",\"method\": \"exit\", \"params\": null }";
-        let msg: Message = serde_json::from_str(text).unwrap();
-
-        assert!(matches!(msg, Message::Notification(not) if not.method == "exit"));
-    }
-
-    #[test]
-    fn notification_with_no_params() {
-        let text = "{\"jsonrpc\": \"2.0\",\"method\": \"exit\"}";
-        let msg: Message = serde_json::from_str(text).unwrap();
-
-        assert!(matches!(msg, Message::Notification(not) if not.method == "exit"));
-    }
+    use super::{Message, Notification, Request, RequestId, Response, ResponseError};
 
     #[test]
     fn serialize_request_with_null_params() {
@@ -390,5 +361,98 @@ mod tests {
         let serialized = serde_json::to_string(&msg).unwrap();
 
         assert_eq!("{\"method\":\"exit\"}", serialized);
+    }
+    #[test]
+    fn test_msg_deserialization() {
+        let test_cases = [
+            (
+                "request",
+                vec![
+                    (r#""id": 1, "method": "shutdown", "params": null"#, "shutdown"), // null params
+                    (r#""id": "req-abc", "method": "textDocument/hover""#, "textDocument/hover"), // string id, missing params
+                    (r#""id": 42, "method": "workspace_symbol", "params": {}"#, "workspace_symbol"), // empty object params
+                    (r#""id": 999, "method": "custom/method_123", "params": [1,2,3]"#, "custom/method_123"), // array params
+                ],
+            ),
+            (
+                "notification",
+                vec![
+                    (r#""method": "exit", "params": null"#, "exit"), // null params
+                    (r#""method": "initialized""#, "initialized"),   // missing params
+                    (r#""method": "textDocument/didOpen", "params": {"uri": "file://test"}"#, "textDocument/didOpen"), // object params, slash method
+                ],
+            ),
+            (
+                "response",
+                vec![
+                    (r#""id": 1, "result": "success""#, ""),        // success with string result
+                    (r#""id": "resp-2", "result": null"#, ""),      // success with null result
+                    (r#""id": 3"#, ""),                             // implicit null for both result and error
+                    (r#""id": 4, "result": {}"#, ""),               // success with empty result
+                    (r#""id": 5, "result": {"status": "ok"}"#, ""), // success with data
+                    (r#""id": 6, "error": null"#, ""),              // explicit null error
+                    (r#""id": 8, "error": {"code": -1, "message": "err1"}"#, ""), // error with no data
+                    (r#""id": 9, "error": {"code": -2, "message": "err2", "data": {}}"#, ""), // error with empty data
+                    (r#""id": 10, "error": {"code": -2, "message": "err2", "data": {"k":"v"}}"#, ""), // error with some data
+                ],
+            ),
+        ];
+
+        for (msg_type, cases) in test_cases {
+            for (json_fields, expected) in cases {
+                let full_json_str = format!(r#"{{"jsonrpc": "2.0", {}}}"#, json_fields);
+
+                let lsp_message = format!("Content-Length: {}\r\n\r\n{}", full_json_str.len(), full_json_str);
+                let mut cursor = std::io::Cursor::new(lsp_message.as_bytes());
+                let msg = Message::read(&mut cursor).unwrap().unwrap();
+
+                assert_eq!(msg.content(), &full_json_str, "Content should contain original JSON");
+
+                match (msg_type, &msg) {
+                    ("request", Message::Request(req)) => {
+                        assert_eq!(req.method, expected, "Request method mismatch for: {}", json_fields);
+                    }
+
+                    ("notification", Message::Notification(notif)) => {
+                        assert_eq!(notif.method, expected, "Notification method mismatch for: {}", json_fields);
+                    }
+
+                    ("response", Message::Response(resp)) => {
+                        // convert input json to expected result and error
+                        let json: serde_json::Value = serde_json::from_str(&full_json_str).unwrap();
+
+                        let extract_expected = |key: &str| match json.get(key) {
+                            None => None,
+                            Some(v) if v.is_null() => None,
+                            Some(v) => Some(v.clone()),
+                        };
+                        let expected_result = extract_expected("result");
+                        let expected_error = extract_expected("error")
+                            .and_then(|v| serde_json::from_value::<ResponseError>(v.clone()).ok());
+
+                        fn compare_fields<T>(
+                            actual: &Option<T>, expected: &Option<T>, field_name: &str, json_fields: &str,
+                        ) where
+                            T: PartialEq + std::fmt::Debug,
+                        {
+                            match (actual, expected) {
+                                (None, None) => {} // ok. Both are None
+                                (Some(actual), Some(expected)) => {
+                                    assert_eq!(actual, expected, "{} mismatch for: {}", field_name, json_fields);
+                                }
+                                _ => panic!(
+                                    "{} mismatch for: {} | actual={:?}, expected={:?}",
+                                    field_name, json_fields, actual, expected
+                                ),
+                            }
+                        }
+
+                        compare_fields(&resp.result, &expected_result, "Result", json_fields);
+                        compare_fields(&resp.error, &expected_error, "Error", json_fields);
+                    }
+                    _ => panic!("Type mismatch for {} | {} {}", json_fields, msg_type, &msg),
+                }
+            }
+        }
     }
 }
