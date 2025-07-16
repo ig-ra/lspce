@@ -225,30 +225,9 @@ impl fmt::Display for Message {
 }
 
 impl Response {
-    pub fn new_ok<R: Serialize>(id: RequestId, result: R) -> Response {
-        Response {
-            id,
-            result: Some(serde_json::to_value(result).unwrap()),
-            error: None,
-            content: "".to_string(),
-            request_tick: "".to_string(),
-        }
-    }
     pub fn new_err(id: RequestId, code: i32, message: String) -> Response {
         let error = ResponseError { code, message, data: None };
         Response { id, result: None, error: Some(error), content: "".to_string(), request_tick: "".to_string() }
-    }
-}
-
-impl Request {
-    pub fn new<P: Serialize>(id: RequestId, method: String, params: P) -> Request {
-        Request {
-            id,
-            method,
-            params: serde_json::to_value(params).unwrap(),
-            content: "".to_string(),
-            request_tick: None,
-        }
     }
 }
 
