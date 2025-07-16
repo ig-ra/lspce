@@ -261,13 +261,6 @@ impl Request {
             Err(ExtractError::MethodMismatch(self))
         }
     }
-
-    pub(crate) fn is_shutdown(&self) -> bool {
-        self.method == "shutdown"
-    }
-    pub(crate) fn is_initialize(&self) -> bool {
-        self.method == "initialize"
-    }
 }
 
 impl Notification {
@@ -280,12 +273,6 @@ impl Notification {
         } else {
             Err(ExtractError::MethodMismatch(self))
         }
-    }
-    pub(crate) fn is_exit(&self) -> bool {
-        self.method == "exit"
-    }
-    pub(crate) fn is_initialized(&self) -> bool {
-        self.method == "initialized"
     }
 }
 
