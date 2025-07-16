@@ -80,6 +80,7 @@ pub struct Request {
     pub params: serde_json::Value,
     #[serde(skip)]
     pub content: String,
+    #[serde(skip)]
     pub request_tick: Option<String>,
 }
 
