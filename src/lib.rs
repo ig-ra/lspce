@@ -1,7 +1,6 @@
 #![allow(unused)]
 
 mod connection;
-mod error;
 pub mod logger;
 mod msg;
 mod socket;

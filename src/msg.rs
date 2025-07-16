@@ -8,8 +8,6 @@ use bytes::Buf;
 use bytes::BytesMut;
 use serde::{de::DeserializeOwned, Deserialize, Serialize};
 
-use crate::error::ExtractError;
-
 #[derive(Serialize, Deserialize, Debug, Clone)]
 #[serde(untagged)]
 pub enum Message {
@@ -252,27 +250,11 @@ impl Request {
             request_tick: None,
         }
     }
-    pub fn extract<P: DeserializeOwned>(self, method: &str) -> Result<(RequestId, P), ExtractError<Request>> {
-        if self.method == method {
-            let params = serde_json::from_value(self.params)
-                .map_err(|error| ExtractError::JsonError { method: self.method, error })?;
-            Ok((self.id, params))
-        } else {
-            Err(ExtractError::MethodMismatch(self))
-        }
-    }
 }
 
 impl Notification {
     pub fn new(method: impl Into<String>, params: impl Serialize) -> Notification {
         Notification { method: method.into(), params: serde_json::to_value(params).unwrap(), content: "".to_string() }
-    }
-    pub fn extract<P: DeserializeOwned>(self, method: &str) -> Result<P, ExtractError<Notification>> {
-        if self.method == method {
-            serde_json::from_value(self.params).map_err(|error| ExtractError::JsonError { method: self.method, error })
-        } else {
-            Err(ExtractError::MethodMismatch(self))
-        }
     }
 }
 
