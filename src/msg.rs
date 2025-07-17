@@ -17,19 +17,19 @@ pub enum Message {
 }
 
 impl From<Request> for Message {
-    fn from(request: Request) -> Message {
+    fn from(request: Request) -> Self {
         Message::Request(request)
     }
 }
 
 impl From<Response> for Message {
-    fn from(response: Response) -> Message {
+    fn from(response: Response) -> Self {
         Message::Response(response)
     }
 }
 
 impl From<Notification> for Message {
-    fn from(notification: Notification) -> Message {
+    fn from(notification: Notification) -> Self {
         Message::Notification(notification)
     }
 }
@@ -227,7 +227,7 @@ impl fmt::Display for Message {
 impl Response {
     pub fn new_err(id: RequestId, code: i32, message: String) -> Response {
         let error = ResponseError { code, message, data: None };
-        Response { id, result: None, error: Some(error), content: "".to_string(), request_tick: "".to_string() }
+        Response { id, result: None, error: Some(error), content: String::new(), request_tick: String::new() }
     }
 }
 

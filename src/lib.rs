@@ -672,7 +672,7 @@ pub fn initialize(env: &Env, server: &mut LspServer, req: Request, timeout: Dura
             let ir: InitializeResult = serde_json::from_value(response.result.context("Empty initialize response")?)?;
 
             let initialized = Notification::new("initialized", InitializedParams {})?;
-            server.write(Message::Notification(initialized))?;
+            server.write(initialized)?;
 
             server.server_info.capabilities = serde_json::to_string(&ir.capabilities)?;
             if let Some(si) = ir.server_info {
@@ -718,7 +718,7 @@ pub fn shutdown_server(mut server: LspServer, req: Request) -> Result<Option<Exi
         match server.read_response() {
             Some(resp) if resp.id == req_id => {
                 let exit = Notification::new("exit", json!({}))?;
-                let _ = server.write(Message::Notification(exit));
+                let _ = server.write(exit);
                 return server.shutdown(shutdown_timeout); // Graceful + forced, if needed
             }
             Some(_) => continue, // Ignore responses with non-matched id
@@ -775,7 +775,7 @@ fn _request_async(server: &mut LspServer, req: Request) -> Result<Option<bool>> 
             server.clear_diagnostics(uri);
         }
     }
-    server.write(Message::Request(req)).context("request")?;
+    server.write(req)?;
     Ok(Some(true))
 }
 
@@ -794,8 +794,8 @@ fn request_async(env: &Env, root_uri: String, file_type: String, req: String) ->
 fn notify(env: &Env, root_uri: String, file_type: String, req: String) -> Result<Option<bool>> {
     with_server(env, &root_uri, &file_type, |server| {
         Logger::trace(format!("notify {}", &req));
-        let n = serde_json::from_str(&req).context("failed to parse notification JSON")?;
-        server.write(Message::Notification(n)).context("notify")?;
+        let n = serde_json::from_str::<Notification>(&req).context("failed to parse notification JSON")?;
+        server.write(n)?;
         Ok(Some(true))
     })
 }
