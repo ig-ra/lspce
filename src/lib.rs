@@ -294,9 +294,14 @@ impl LspServer {
         server_data.latest_response_tick.clone()
     }
 
-    pub fn write(&self, request: Message) -> Result<()> {
-        let transport = self.transport.lock().unwrap();
-        transport.as_ref().context("transport is not established")?.write(request).map_err(anyhow::Error::msg)
+    pub fn write<M: Into<Message>>(&self, msg: M) -> Result<()> {
+        self.transport
+            .lock()
+            .map_err(|_| anyhow!("transport mutex poisoned"))?
+            .as_ref()
+            .context("transport not established")?
+            .write(msg.into())
+            .context("failed to write to transport")
     }
 
     pub fn read_response(&self) -> Option<Response> {
