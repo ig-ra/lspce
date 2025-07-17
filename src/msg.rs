@@ -232,8 +232,8 @@ impl Response {
 }
 
 impl Notification {
-    pub fn new(method: impl Into<String>, params: impl Serialize) -> Notification {
-        Notification { method: method.into(), params: serde_json::to_value(params).unwrap(), content: "".to_string() }
+    pub fn new(method: impl Into<String>, params: impl Serialize) -> Result<Notification, serde_json::Error> {
+        Ok(Notification { method: method.into(), params: serde_json::to_value(params)?, content: String::new() })
     }
 }
 

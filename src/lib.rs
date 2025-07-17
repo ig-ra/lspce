@@ -666,7 +666,7 @@ pub fn initialize(env: &Env, server: &mut LspServer, req: Request, timeout: Dura
 
             let ir: InitializeResult = serde_json::from_value(response.result.context("Empty initialize response")?)?;
 
-            let initialized = Notification::new("initialized", serde_json::to_value(InitializedParams {})?);
+            let initialized = Notification::new("initialized", InitializedParams {})?;
             server.write(Message::Notification(initialized))?;
 
             server.server_info.capabilities = serde_json::to_string(&ir.capabilities)?;
@@ -712,7 +712,7 @@ pub fn shutdown_server(mut server: LspServer, req: Request) -> Result<Option<Exi
     loop {
         match server.read_response() {
             Some(resp) if resp.id == req_id => {
-                let exit = Notification::new("exit", json!({}));
+                let exit = Notification::new("exit", json!({}))?;
                 let _ = server.write(Message::Notification(exit));
                 return server.shutdown(shutdown_timeout); // Graceful + forced, if needed
             }
