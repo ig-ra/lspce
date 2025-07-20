@@ -16,23 +16,30 @@ pub enum Message {
     Notification(Notification),
 }
 
-impl From<Request> for Message {
-    fn from(request: Request) -> Self {
-        Message::Request(request)
-    }
+macro_rules! impl_message_from {
+    ($($variant:ident),*) => {
+        $(
+            impl From<$variant> for Message {
+                fn from(value: $variant) -> Self {
+                    Message::$variant(value)
+                }
+            }
+
+            impl TryFrom<Message> for $variant {
+                type Error = anyhow::Error;
+
+                fn try_from(message: Message) -> Result<Self, Self::Error> {
+                    match message {
+                        Message::$variant(value) => Ok(value),
+                        _ => anyhow::bail!("Expected {} but got {}", stringify!($variant), message.msg_type()),
+                    }
+                }
+            }
+        )*
+    };
 }
 
-impl From<Response> for Message {
-    fn from(response: Response) -> Self {
-        Message::Response(response)
-    }
-}
-
-impl From<Notification> for Message {
-    fn from(notification: Notification) -> Self {
-        Message::Notification(notification)
-    }
-}
+impl_message_from!(Request, Response, Notification);
 
 #[derive(Debug, Serialize, Deserialize, Clone, PartialEq, Eq, PartialOrd, Ord, Hash)]
 #[serde(transparent)]
