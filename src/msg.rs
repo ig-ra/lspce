@@ -378,12 +378,12 @@ mod tests {
             (
                 "response",
                 vec![
-                    (r#""id": 1, "result": "success""#, ""),        // success with string result
-                    (r#""id": "resp-2", "result": null"#, ""),      // success with null result
-                    (r#""id": 3"#, ""),                             // implicit null for both result and error
-                    (r#""id": 4, "result": {}"#, ""),               // success with empty result
+                    (r#""id": 1, "result": "success""#, ""),   // success with string result
+                    (r#""id": "resp-2", "result": null"#, ""), // success with explicit null result
+                    // (r#""id": 3"#, ""),                             // implicit null for both result and error - should fail on proto verification
+                    (r#""id": 4, "result": {}"#, ""), // success with empty result
                     (r#""id": 5, "result": {"status": "ok"}"#, ""), // success with data
-                    (r#""id": 6, "error": null"#, ""),              // explicit null error
+                    (r#""id": 6, "error": null"#, ""), // explicit null error
                     (r#""id": 8, "error": {"code": -1, "message": "err1"}"#, ""), // error with no data
                     (r#""id": 9, "error": {"code": -2, "message": "err2", "data": {}}"#, ""), // error with empty data
                     (r#""id": 10, "error": {"code": -2, "message": "err2", "data": {"k":"v"}}"#, ""), // error with some data
@@ -445,6 +445,33 @@ mod tests {
                     }
                     _ => panic!("Type mismatch for {} | {} {}", json_fields, msg_type, &msg),
                 }
+            }
+        }
+    }
+
+    #[test]
+    fn test_from_str() {
+        let test_cases = [
+            (r#"{"id": 1, "method": "shutdown"}"#, "Request"),
+            (r#"{"id": 1, "result": "success"}"#, "Response"),
+            (r#"{"id": 3, "error": {"code": -1, "message": "test"}}"#, "Response"),
+            (r#"{"method": "exit"}"#, "Notification"),
+        ];
+
+        for (json, expected_type) in test_cases {
+            // always succeed to create a Message from a valid json. Ensure expected type
+            let message =
+                Message::from_str(json).expect(&format!("from_str should succeed for valid msg json: {}", json));
+            assert_eq!(message.msg_type(), expected_type, "from_str should return {} for: {}", expected_type, json);
+
+            // Try to parse to specific types. Succeed only for expected one
+            for (type_name, result_ok) in [
+                ("Request", Message::from_str_typed::<Request>(json).is_ok()),
+                ("Response", Message::from_str_typed::<Response>(json).is_ok()),
+                ("Notification", Message::from_str_typed::<Notification>(json).is_ok()),
+            ] {
+                let should_succeed = type_name == expected_type;
+                assert_eq!(result_ok, should_succeed, "{} parse for: {}", type_name, json);
             }
         }
     }
