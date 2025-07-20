@@ -6,6 +6,7 @@ use std::{
 
 use bytes::Buf;
 use bytes::BytesMut;
+use serde::de::Error as SerdeError;
 use serde::{de::DeserializeOwned, Deserialize, Serialize};
 
 #[derive(Serialize, Deserialize, Debug, Clone)]
@@ -167,6 +168,42 @@ pub struct Notification {
 }
 
 impl Message {
+    pub fn from_str(json: &str) -> anyhow::Result<Message, serde_json::Error> {
+        // Although we could just use serde_json::from_str(json) but it cannot ensure that Request won't be
+        // deserialized as Response or Notification. So let's solve this manually instead of relying on serde
+        let value: serde_json::Value = serde_json::from_str(json)?;
+
+        if value.get("method").is_some() {
+            if value.get("id").is_some() {
+                // has both method and id -> Request
+                Ok(Message::Request(serde_json::from_value::<Request>(value)?))
+            } else {
+                // has method, but no id -> Notification
+                Ok(Message::Notification(serde_json::from_value::<Notification>(value)?))
+            }
+        } else if value.get("id").is_some() {
+            // Check if keys are present (regardless of value) to distinguish missing key and explicit null one
+            let has_result = value.get("result").is_some();
+            let has_error = value.get("error").is_some();
+
+            match (has_result, has_error) {
+                (true, false) | (false, true) => Ok(Message::Response(serde_json::from_value::<Response>(value)?)),
+                (true, true) | (false, false) => Err(SerdeError::custom("Either result XOR error should be present")),
+            }
+        } else {
+            Err(SerdeError::custom("Failed to parse message"))
+        }
+    }
+
+    pub fn from_str_typed<T>(json: &str) -> anyhow::Result<T>
+    where
+        T: TryFrom<Message>,
+        T::Error: Into<anyhow::Error>,
+    {
+        let message: Message = Self::from_str(json)?;
+        T::try_from(message).map_err(Into::into)
+    }
+
     pub fn content(&self) -> &str {
         match self {
             Message::Request(req) => &req.content,
@@ -191,7 +228,7 @@ impl Message {
             None => return Ok(None),
             Some(text) => text,
         };
-        let mut msg = serde_json::from_str::<Message>(&text)?;
+        let mut msg: Message = Message::from_str(&text)?;
         msg.set_content(text);
         Ok(Some(msg))
     }
