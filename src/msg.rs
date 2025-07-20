@@ -245,16 +245,19 @@ impl Message {
         let text = serde_json::to_string(&JsonRpc { jsonrpc: "2.0", msg: self })?;
         write_msg_text(w, &text)
     }
+
+    pub fn msg_type(&self) -> &'static str {
+        match self {
+            Message::Request(_) => "Request",
+            Message::Response(_) => "Response",
+            Message::Notification(_) => "Notification",
+        }
+    }
 }
 
 impl fmt::Display for Message {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        let msg_type = match self {
-            Message::Request(_) => "request",
-            Message::Response(_) => "response",
-            Message::Notification(_) => "notification",
-        };
-
+        let msg_type = self.msg_type();
         match serde_json::to_string_pretty(self) {
             Ok(pretty) => write!(f, "{} {}", msg_type, pretty),
             Err(e) => {
