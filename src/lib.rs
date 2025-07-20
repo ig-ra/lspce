@@ -639,7 +639,7 @@ fn connect(
         .with_context(|| format!("Failed to create LSP server for {}, <{} {}>", prj_name_type, cmd, cmd_args))?;
 
     Logger::debug(format!("raw initialize request {:#?}", initialize_req_str));
-    let req: Request = serde_json::from_str(&initialize_req_str).context("Failed to parse initialize request JSON")?;
+    let req = Message::from_str_typed::<Request>(&initialize_req_str).context("initialize")?;
     initialize(env, &mut server, req, Duration::from_secs(timeout.max(0) as u64))
         .inspect_err(|_| {
             let _ = server.shutdown(Duration::ZERO); // forcibly kill server and join threads
@@ -740,8 +740,8 @@ pub fn shutdown_server(mut server: LspServer, req: Request) -> Result<Option<Exi
 fn shutdown(env: &Env, root_uri: String, file_type: String, request: String) -> Result<Option<bool>> {
     with_project(env, &root_uri, None, |project| match project.servers.remove(&file_type) {
         Some(server) => {
-            let req = serde_json::from_str::<Request>(&request).context("Failed to parse shutdown request JSON")?;
-            std::thread::spawn(move || shutdown_server(server, req));
+            let msg = Message::from_str_typed::<Request>(&request).context("shutdown")?;
+            std::thread::spawn(move || shutdown_server(server, msg));
             Ok(Some(true))
         }
         None => {
@@ -781,21 +781,21 @@ fn _request_async(server: &mut LspServer, req: Request) -> Result<Option<bool>> 
 
 #[defun_safe]
 #[defun]
-fn request_async(env: &Env, root_uri: String, file_type: String, req: String) -> Result<Option<bool>> {
+fn request_async(env: &Env, root_uri: String, file_type: String, json: String) -> Result<Option<bool>> {
     with_server(env, &root_uri, &file_type, |server| {
-        Logger::trace(format!("request {}", &req));
-        let msg = serde_json::from_str::<Request>(&req).context("Failed to parse request JSON")?;
+        Logger::trace(format!("request {}", &json));
+        let msg = Message::from_str_typed::<Request>(&json).context("request_async")?;
         _request_async(server, msg)
     })
 }
 
 #[defun_safe]
 #[defun]
-fn notify(env: &Env, root_uri: String, file_type: String, req: String) -> Result<Option<bool>> {
+fn notify(env: &Env, root_uri: String, file_type: String, json: String) -> Result<Option<bool>> {
     with_server(env, &root_uri, &file_type, |server| {
-        Logger::trace(format!("notify {}", &req));
-        let n = serde_json::from_str::<Notification>(&req).context("failed to parse notification JSON")?;
-        server.write(n)?;
+        Logger::trace(format!("notify {}", &json));
+        let msg = Message::from_str_typed::<Notification>(&json).context("notify")?;
+        server.write(msg)?;
         Ok(Some(true))
     })
 }
