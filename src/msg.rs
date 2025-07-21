@@ -254,16 +254,9 @@ impl Message {
 
 impl fmt::Display for Message {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        let msg_type = self.msg_type();
         match serde_json::to_string_pretty(self) {
-            Ok(pretty) => write!(f, "{} {}", msg_type, pretty),
-            Err(e) => {
-                if self.content().is_empty() {
-                    write!(f, "{} {}", msg_type, e) // writer. failed seriallization in our constructed message
-                } else {
-                    write!(f, "{} {} - {}", msg_type, e, self.content()) // reader. failed in desirialization
-                }
-            }
+            Ok(pretty) => write!(f, "{} {}", self.msg_type(), pretty),
+            Err(e) => write!(f, "{} {} {}", self.msg_type(), e, self.content()),
         }
     }
 }
