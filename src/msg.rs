@@ -262,6 +262,10 @@ impl Response {
         let error = ResponseError { code, message, data: None };
         Response { id, result: None, error: Some(error), ..Default::default() }
     }
+
+    pub fn new_ok<R: Serialize>(id: RequestId, result: R) -> Result<Response, serde_json::Error> {
+        Ok(Response { id, result: Some(serde_json::to_value(result)?), ..Default::default() })
+    }
 }
 
 impl Notification {
