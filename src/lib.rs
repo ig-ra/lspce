@@ -19,8 +19,7 @@ use lsp_types::{
     Diagnostic, DidChangeTextDocumentParams, InitializeResult, InitializedParams, PublishDiagnosticsParams,
     VersionedTextDocumentIdentifier,
 };
-pub use msg::{Message, Request, RequestId};
-use msg::{Notification, Response};
+pub use msg::{Message, Notification, Request, RequestId, Response};
 use serde::de::DeserializeOwned;
 use serde::{Deserialize, Serialize};
 use serde_json::json;
