@@ -330,29 +330,24 @@ mod tests {
     use super::{Message, Notification, Request, RequestId, Response, ResponseError};
 
     #[test]
-    fn serialize_request_with_null_params() {
-        let msg = Message::Request(Request {
-            id: RequestId::from(3),
-            method: "shutdown".into(),
-            params: serde_json::Value::Null,
-            content: "".to_string(),
-            request_tick: Some("".to_string()),
-        });
-        let serialized = serde_json::to_string(&msg).unwrap();
+    fn test_msg_serialization() {
+        let test_cases: [(Message, &str); 4] = [
+            (
+                Request::new(RequestId::from(3), "shutdown", serde_json::Value::Null).unwrap().into(),
+                r#"{"id":3,"method":"shutdown"}"#,
+            ),
+            (Notification::new("exit", serde_json::Value::Null).unwrap().into(), r#"{"method":"exit"}"#),
+            (Response::new_ok(RequestId::from(1), "success").unwrap().into(), r#"{"id":1,"result":"success"}"#),
+            (
+                Response::new_err(RequestId::from(2), -1, "fail".to_string()).into(),
+                r#"{"id":2,"error":{"code":-1,"message":"fail"}}"#,
+            ),
+        ];
 
-        assert_eq!("{\"id\":3,\"method\":\"shutdown\"}", serialized);
-    }
-
-    #[test]
-    fn serialize_notification_with_null_params() {
-        let msg = Message::Notification(Notification {
-            method: "exit".into(),
-            params: serde_json::Value::Null,
-            content: "".to_string(),
-        });
-        let serialized = serde_json::to_string(&msg).unwrap();
-
-        assert_eq!("{\"method\":\"exit\"}", serialized);
+        for (msg, expected_json) in test_cases {
+            let serialized = serde_json::to_string(&msg).unwrap();
+            assert_eq!(serialized, expected_json);
+        }
     }
     #[test]
     fn test_msg_deserialization() {
