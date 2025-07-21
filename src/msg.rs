@@ -165,29 +165,21 @@ pub struct Notification {
 
 impl Message {
     pub fn from_str(json: &str) -> anyhow::Result<Message, serde_json::Error> {
-        // Although we could just use serde_json::from_str(json) but it cannot ensure that Request won't be
-        // deserialized as Response or Notification. So let's solve this manually instead of relying on serde
+        // Although we could just use serde_json::from_str(json), but then Request could be
+        // deserialized as Response or Notification. So let's validate message type manually
         let value: serde_json::Value = serde_json::from_str(json)?;
 
-        if value.get("method").is_some() {
-            if value.get("id").is_some() {
-                // has both method and id -> Request
-                Ok(Message::Request(serde_json::from_value::<Request>(value)?))
-            } else {
-                // has method, but no id -> Notification
-                Ok(Message::Notification(serde_json::from_value::<Notification>(value)?))
+        // Simple detection of message type based on `method' and `id' fields
+        match (value.get("method").is_some(), value.get("id").is_some()) {
+            (true, true) => Ok(Message::Request(serde_json::from_value::<Request>(value)?)),
+            (true, false) => Ok(Message::Notification(serde_json::from_value::<Notification>(value)?)),
+            (false, true) => {
+                if value.get("result").is_some() == value.get("error").is_some() {
+                    return Err(SerdeError::custom("Response must have either result XOR error"));
+                }
+                Ok(Message::Response(serde_json::from_value::<Response>(value)?))
             }
-        } else if value.get("id").is_some() {
-            // Check if keys are present (regardless of value) to distinguish missing key and explicit null one
-            let has_result = value.get("result").is_some();
-            let has_error = value.get("error").is_some();
-
-            match (has_result, has_error) {
-                (true, false) | (false, true) => Ok(Message::Response(serde_json::from_value::<Response>(value)?)),
-                (true, true) | (false, false) => Err(SerdeError::custom("Either result XOR error should be present")),
-            }
-        } else {
-            Err(SerdeError::custom("Failed to parse message"))
+            (false, false) => Err(SerdeError::custom("Message must have either method or id")),
         }
     }
 
