@@ -119,7 +119,7 @@ pub enum ErrorCode {
     ServerCancelled = -32802,
 }
 
-#[derive(Debug, Serialize, Deserialize, Clone)]
+#[derive(Debug, Serialize, Deserialize, Clone, Default)]
 pub struct Request {
     pub id: RequestId,
     pub method: String,
@@ -265,6 +265,12 @@ impl Response {
 
     pub fn new_ok<R: Serialize>(id: RequestId, result: R) -> Result<Response, serde_json::Error> {
         Ok(Response { id, result: Some(serde_json::to_value(result)?), ..Default::default() })
+    }
+}
+
+impl Request {
+    pub fn new(id: RequestId, method: impl Into<String>, params: impl Serialize) -> Result<Request, serde_json::Error> {
+        Ok(Request { id, method: method.into(), params: serde_json::to_value(params)?, ..Default::default() })
     }
 }
 
