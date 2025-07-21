@@ -39,7 +39,7 @@ macro_rules! impl_message_from {
 
 impl_message_from!(Request, Response, Notification);
 
-#[derive(Debug, Serialize, Deserialize, Clone, PartialEq, Eq, PartialOrd, Ord, Hash)]
+#[derive(Debug, Default, Serialize, Deserialize, Clone, PartialEq, Eq, PartialOrd, Ord, Hash)]
 #[serde(transparent)]
 pub struct RequestId(IdRepr);
 
@@ -48,6 +48,12 @@ pub struct RequestId(IdRepr);
 enum IdRepr {
     Number(i32),
     String(String),
+}
+
+impl Default for IdRepr {
+    fn default() -> Self {
+        IdRepr::Number(0)
+    }
 }
 
 impl From<i32> for RequestId {
@@ -126,7 +132,7 @@ pub struct Request {
     pub request_tick: Option<String>,
 }
 
-#[derive(Debug, Serialize, Deserialize, Clone)]
+#[derive(Debug, Serialize, Deserialize, Clone, Default)]
 pub struct Response {
     // JSON RPC allows this to be null if it was impossible
     // to decode the request's id. Ignore this special case
@@ -153,7 +159,7 @@ pub struct ResponseError {
     pub data: Option<serde_json::Value>,
 }
 
-#[derive(Debug, Serialize, Deserialize, Clone)]
+#[derive(Debug, Serialize, Deserialize, Clone, Default)]
 pub struct Notification {
     pub method: String,
     #[serde(default = "serde_json::Value::default")]
@@ -254,13 +260,13 @@ impl fmt::Display for Message {
 impl Response {
     pub fn new_err(id: RequestId, code: i32, message: String) -> Response {
         let error = ResponseError { code, message, data: None };
-        Response { id, result: None, error: Some(error), content: String::new(), request_tick: String::new() }
+        Response { id, result: None, error: Some(error), ..Default::default() }
     }
 }
 
 impl Notification {
     pub fn new(method: impl Into<String>, params: impl Serialize) -> Result<Notification, serde_json::Error> {
-        Ok(Notification { method: method.into(), params: serde_json::to_value(params)?, content: String::new() })
+        Ok(Notification { method: method.into(), params: serde_json::to_value(params)?, ..Default::default() })
     }
 }
 
