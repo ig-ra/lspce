@@ -1,11 +1,8 @@
 use std::{
     fmt,
     io::{self, BufRead, Read, Write},
-    thread, time,
 };
 
-use bytes::Buf;
-use bytes::BytesMut;
 use serde::de::Error as SerdeError;
 use serde::{de::DeserializeOwned, Deserialize, Serialize};
 
@@ -229,6 +226,7 @@ impl Message {
         msg.set_content(text);
         Ok(Some(msg))
     }
+
     pub fn write(self, w: &mut impl Write) -> io::Result<()> {
         self._write(w)
     }
