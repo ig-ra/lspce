@@ -170,6 +170,12 @@ pub struct Notification {
 }
 
 impl Message {
+    /// Serialize the message to a JSON string.
+    pub fn to_string(&self) -> Result<String, serde_json::Error> {
+        serde_json::to_string(self)
+    }
+
+    /// Deserialize a Message from a JSON string.
     pub fn from_str(json: &str) -> anyhow::Result<Message, serde_json::Error> {
         // Although we could just use serde_json::from_str(json), but then Request could be
         // deserialized as Response or Notification. So let's validate message type manually
@@ -189,6 +195,7 @@ impl Message {
         }
     }
 
+    /// Deserialize specific message type from a JSON string.
     pub fn from_str_typed<T>(json: &str) -> anyhow::Result<T>
     where
         T: TryFrom<Message, Error = anyhow::Error>,
@@ -345,7 +352,7 @@ mod tests {
         ];
 
         for (msg, expected_json) in test_cases {
-            let serialized = serde_json::to_string(&msg).unwrap();
+            let serialized = msg.to_string().unwrap();
             assert_eq!(serialized, expected_json);
         }
     }
