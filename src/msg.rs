@@ -196,11 +196,9 @@ impl Message {
 
     pub fn from_str_typed<T>(json: &str) -> anyhow::Result<T>
     where
-        T: TryFrom<Message>,
-        T::Error: Into<anyhow::Error>,
+        T: TryFrom<Message, Error = anyhow::Error>,
     {
-        let message: Message = Self::from_str(json)?;
-        T::try_from(message).map_err(Into::into)
+        Self::from_str(json)?.try_into()
     }
 
     pub fn content(&self) -> &str {
