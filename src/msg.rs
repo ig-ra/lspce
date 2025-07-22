@@ -14,31 +14,6 @@ pub enum Message {
     Notification(Notification),
 }
 
-macro_rules! impl_message_from {
-    ($($variant:ident),*) => {
-        $(
-            impl From<$variant> for Message {
-                fn from(value: $variant) -> Self {
-                    Message::$variant(value)
-                }
-            }
-
-            impl TryFrom<Message> for $variant {
-                type Error = anyhow::Error;
-
-                fn try_from(message: Message) -> Result<Self, Self::Error> {
-                    match message {
-                        Message::$variant(value) => Ok(value),
-                        _ => anyhow::bail!("Expected {} but got {}", stringify!($variant), message.msg_type()),
-                    }
-                }
-            }
-        )*
-    };
-}
-
-impl_message_from!(Request, Response, Notification);
-
 #[derive(Debug, Default, Serialize, Deserialize, Clone, PartialEq, Eq, PartialOrd, Ord, Hash)]
 #[serde(transparent)]
 pub struct RequestId(IdRepr);
@@ -169,6 +144,45 @@ pub struct Notification {
     pub content: String,
 }
 
+// implement From, TryFrom and Display for each message type
+macro_rules! impl_methods {
+    ($($variant:ident),*) => {
+        $(
+            impl From<$variant> for Message {
+                fn from(value: $variant) -> Self {
+                    Message::$variant(value)
+                }
+            }
+
+            impl TryFrom<Message> for $variant {
+                type Error = anyhow::Error;
+
+                fn try_from(message: Message) -> Result<Self, Self::Error> {
+                    match message {
+                        Message::$variant(value) => Ok(value),
+                        _ => anyhow::bail!("Expected {} but got {}", stringify!($variant), message.msg_type()),
+                    }
+                }
+            }
+
+             impl fmt::Display for $variant {
+                fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+                    display_message(f, self, stringify!($variant), &self.content)
+                }
+            }
+        )*
+    };
+}
+
+impl_methods!(Request, Response, Notification);
+
+fn display_message<T: Serialize>(f: &mut fmt::Formatter<'_>, value: &T, type_name: &str, content: &str) -> fmt::Result {
+    match serde_json::to_string_pretty(value) {
+        Ok(pretty) => write!(f, "{} {}", type_name, pretty),
+        Err(e) => write!(f, "{} {} {}", type_name, e, content),
+    }
+}
+
 impl Message {
     /// Serialize the message to a JSON string.
     pub fn to_string(&self) -> Result<String, serde_json::Error> {
@@ -219,6 +233,14 @@ impl Message {
         }
     }
 
+    pub fn msg_type(&self) -> &'static str {
+        match self {
+            Message::Request(_) => "Request",
+            Message::Response(_) => "Response",
+            Message::Notification(_) => "Notification",
+        }
+    }
+
     pub fn read(r: &mut impl BufRead) -> io::Result<Option<Message>> {
         Message::_read(r)
     }
@@ -245,21 +267,14 @@ impl Message {
         let text = serde_json::to_string(&JsonRpc { jsonrpc: "2.0", msg: self })?;
         write_msg_text(w, &text)
     }
-
-    pub fn msg_type(&self) -> &'static str {
-        match self {
-            Message::Request(_) => "Request",
-            Message::Response(_) => "Response",
-            Message::Notification(_) => "Notification",
-        }
-    }
 }
 
 impl fmt::Display for Message {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        match serde_json::to_string_pretty(self) {
-            Ok(pretty) => write!(f, "{} {}", self.msg_type(), pretty),
-            Err(e) => write!(f, "{} {} {}", self.msg_type(), e, self.content()),
+        match self {
+            Message::Request(request) => request.fmt(f),
+            Message::Response(response) => response.fmt(f),
+            Message::Notification(notification) => notification.fmt(f),
         }
     }
 }
