@@ -655,7 +655,7 @@ fn connect(
 }
 
 pub fn initialize(env: &Env, server: &mut LspServer, req: Request, timeout: Duration) -> Result<()> {
-    Logger::info(format!("initialize request {}", serde_json::to_string_pretty(&req)?));
+    Logger::info(format!("initialize request {}", &req));
     _request_async(server, req)?;
 
     let start_time = Instant::now();
@@ -666,7 +666,7 @@ pub fn initialize(env: &Env, server: &mut LspServer, req: Request, timeout: Dura
             }
 
             // FIXME: why do we need pretty? what do we do after?
-            Logger::info(format!("initialize response {}", serde_json::to_string_pretty(&response)?));
+            Logger::info(format!("initialize response {}", &response));
 
             let ir: InitializeResult = serde_json::from_value(response.result.context("Empty initialize response")?)?;
 
