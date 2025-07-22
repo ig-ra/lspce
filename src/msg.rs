@@ -144,7 +144,7 @@ pub struct Notification {
     pub content: String,
 }
 
-// implement From, TryFrom and Display for each message type
+// implement From, TryFrom and Display and into_string for each message type
 macro_rules! impl_methods {
     ($($variant:ident),*) => {
         $(
@@ -162,6 +162,12 @@ macro_rules! impl_methods {
                         Message::$variant(value) => Ok(value),
                         _ => anyhow::bail!("Expected {} but got {}", stringify!($variant), message.msg_type()),
                     }
+                }
+            }
+
+            impl $variant {
+                pub fn into_string(self) -> String {
+                    self.content
                 }
             }
 

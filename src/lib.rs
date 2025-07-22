@@ -202,7 +202,7 @@ impl LspServer {
                         // }
                     }
                     Message::Response(mut r) => {
-                        Logger::trace(format!("Response {}", r.content));
+                        Logger::trace(format!("Response {}", r));
                         let id = r.id.clone();
 
                         let mut server_data = server_data.lock().unwrap();
@@ -806,14 +806,14 @@ fn read_response_exact(
     env: &Env, root_uri: String, file_type: String, id: String, method: String,
 ) -> Result<Option<String>> {
     with_server(env, &root_uri, &file_type, |server| {
-        Ok(server.read_response_exact(RequestId::from(id), method).map(|r| r.content))
+        Ok(server.read_response_exact(RequestId::from(id), method).map(|r| r.into_string()))
     })
 }
 
 #[defun_safe]
 #[defun]
 fn read_notification(env: &Env, root_uri: String, file_type: String) -> Result<Option<String>> {
-    with_server(env, &root_uri, &file_type, |server| Ok(server.read_notification().map(|r| r.content)))
+    with_server(env, &root_uri, &file_type, |server| Ok(server.read_notification().map(|r| r.into_string())))
 }
 
 #[defun_safe]
