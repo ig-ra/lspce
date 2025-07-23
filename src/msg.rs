@@ -6,6 +6,48 @@ use std::{
 use serde::de::Error as SerdeError;
 use serde::{de::DeserializeOwned, Deserialize, Serialize};
 
+/// # Examples
+/// Creating Requests, Notification, Responses (both types) and Messages
+///
+/// ```rust
+/// use lspce_module::{Request, RequestId, Response, Notification};
+/// let _ = Request::new(3, "shutdown", serde_json::Value::Null);
+/// let _ = Notification::new("exit", serde_json::Value::Null);
+/// let _ = Response::new_ok(1, "success");
+/// let _ = Response::new_err("", -1, "fail");
+///
+/// let _ = Request::default();
+/// let _ = Notification::default();
+/// let _ = Response::default();
+/// ```
+///
+/// This should fail, since the intended way to create Requests, Notifications and Responses are via ::new
+/// ```compile_fail
+/// use lspce_module::{Request, RequestId};
+/// let _ =  Request{id: RequestId::from(3), method: "shutdown".to_string(), params: serde_json::Value::Null, content: String::new(), request_tick: None};
+/// ```
+/// ```compile_fail
+/// use lspce_module::Notification;
+/// let _ = Notification { method: "exit".to_string(), params: serde_json::Value::Null, content: String::new() };
+/// ```
+/// ```compile_fail
+/// use lspce_module::{Response, RequestId};
+/// let _ = Response { id: RequestId::from(1), result: Some(serde_json::Value::Null), error: None, content: String::new(), request_tick: String::new() };
+/// ```
+///
+/// Generic and specific Message type creation
+/// ```rust
+/// use lspce_module::{Message, Request, Response};
+/// let request_json = r#"{"id": 1, "method": "shutdown"}"#;
+/// let m = Message::from_str(request_json).unwrap(); // Messsage::Request
+/// let r = Message::from_str_typed::<Request>(request_json).unwrap(); // Request
+/// match m {
+///    Message::Request(req) => assert_eq!(req, r),
+///    _ => panic!("Expected Message::Request variant"),
+/// }
+/// assert!(Message::from_str_typed::<Response>(request_json).is_err(), "Not a Response JSON");
+/// ```
+
 #[derive(Serialize, Deserialize, Debug, Clone)]
 #[serde(untagged)]
 pub enum Message {
@@ -101,7 +143,7 @@ pub enum ErrorCode {
     ServerCancelled = -32802,
 }
 
-#[derive(Debug, Serialize, Deserialize, Clone, Default)]
+#[derive(Debug, Serialize, Deserialize, Clone, Default, PartialEq)]
 pub struct Request {
     pub id: RequestId,
     pub method: String,
@@ -109,12 +151,12 @@ pub struct Request {
     #[serde(skip_serializing_if = "serde_json::Value::is_null")]
     pub params: serde_json::Value,
     #[serde(skip)]
-    pub content: String,
+    content: String,
     #[serde(skip)]
     pub request_tick: Option<String>,
 }
 
-#[derive(Debug, Serialize, Deserialize, Clone, Default)]
+#[derive(Debug, Serialize, Deserialize, Clone, Default, PartialEq)]
 pub struct Response {
     // JSON RPC allows this to be null if it was impossible
     // to decode the request's id. Ignore this special case
@@ -128,7 +170,7 @@ pub struct Response {
     #[serde(skip_serializing_if = "Option::is_none")]
     pub error: Option<ResponseError>,
     #[serde(skip)]
-    pub content: String,
+    content: String,
     #[serde(skip)]
     pub request_tick: String,
 }
@@ -141,14 +183,14 @@ pub struct ResponseError {
     pub data: Option<serde_json::Value>,
 }
 
-#[derive(Debug, Serialize, Deserialize, Clone, Default)]
+#[derive(Debug, Serialize, Deserialize, Clone, Default, PartialEq)]
 pub struct Notification {
     pub method: String,
     #[serde(default = "serde_json::Value::default")]
     #[serde(skip_serializing_if = "serde_json::Value::is_null")]
     pub params: serde_json::Value,
     #[serde(skip)]
-    pub content: String,
+    content: String,
 }
 
 // implement From, TryFrom and Display and into_string for each message type
@@ -230,7 +272,7 @@ impl Message {
         Self::from_str(json)?.try_into()
     }
 
-    pub fn content(&self) -> &str {
+    fn content(&self) -> &str {
         match self {
             Message::Request(req) => &req.content,
             Message::Response(resp) => &resp.content,
