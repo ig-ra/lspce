@@ -37,11 +37,18 @@ impl From<i32> for RequestId {
     }
 }
 
-impl From<String> for RequestId {
-    fn from(id: String) -> RequestId {
-        RequestId(IdRepr::String(id))
-    }
+macro_rules! impl_from_string_for_idrepr {
+    ($($t:ty),*) => {
+        $(
+            impl From<$t> for RequestId {
+                fn from(id: $t) -> RequestId {
+                    RequestId(IdRepr::String(id.into()))
+                }
+            }
+        )*
+    };
 }
+impl_from_string_for_idrepr!(String, &str, &String); // all String-like types
 
 impl fmt::Display for RequestId {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
@@ -286,19 +293,21 @@ impl fmt::Display for Message {
 }
 
 impl Response {
-    pub fn new_err(id: RequestId, code: i32, message: String) -> Response {
-        let error = ResponseError { code, message, data: None };
-        Response { id, result: None, error: Some(error), ..Default::default() }
+    pub fn new_err(id: impl Into<RequestId>, code: i32, message: impl Into<String>) -> Response {
+        let error = ResponseError { code, message: message.into(), data: None };
+        Response { id: id.into(), result: None, error: Some(error), ..Default::default() }
     }
 
-    pub fn new_ok<R: Serialize>(id: RequestId, result: R) -> Result<Response, serde_json::Error> {
-        Ok(Response { id, result: Some(serde_json::to_value(result)?), ..Default::default() })
+    pub fn new_ok(id: impl Into<RequestId>, result: impl Serialize) -> Result<Response, serde_json::Error> {
+        Ok(Response { id: id.into(), result: Some(serde_json::to_value(result)?), ..Default::default() })
     }
 }
 
 impl Request {
-    pub fn new(id: RequestId, method: impl Into<String>, params: impl Serialize) -> Result<Request, serde_json::Error> {
-        Ok(Request { id, method: method.into(), params: serde_json::to_value(params)?, ..Default::default() })
+    pub fn new(
+        id: impl Into<RequestId>, m: impl Into<String>, params: impl Serialize,
+    ) -> Result<Request, serde_json::Error> {
+        Ok(Request { id: id.into(), method: m.into(), params: serde_json::to_value(params)?, ..Default::default() })
     }
 }
 
@@ -360,16 +369,10 @@ mod tests {
     #[test]
     fn test_msg_serialization() {
         let test_cases: [(Message, &str); 4] = [
-            (
-                Request::new(RequestId::from(3), "shutdown", serde_json::Value::Null).unwrap().into(),
-                r#"{"id":3,"method":"shutdown"}"#,
-            ),
+            (Request::new(1, "shutdown", serde_json::Value::Null).unwrap().into(), r#"{"id":1,"method":"shutdown"}"#),
             (Notification::new("exit", serde_json::Value::Null).unwrap().into(), r#"{"method":"exit"}"#),
-            (Response::new_ok(RequestId::from(1), "success").unwrap().into(), r#"{"id":1,"result":"success"}"#),
-            (
-                Response::new_err(RequestId::from(2), -1, "fail".to_string()).into(),
-                r#"{"id":2,"error":{"code":-1,"message":"fail"}}"#,
-            ),
+            (Response::new_ok(3, "success").unwrap().into(), r#"{"id":3,"result":"success"}"#),
+            (Response::new_err("", -1, "fail").into(), r#"{"id":"","error":{"code":-1,"message":"fail"}}"#),
         ];
 
         for (msg, expected_json) in test_cases {
