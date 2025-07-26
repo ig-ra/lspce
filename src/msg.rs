@@ -3,6 +3,8 @@ use std::{
     io::{self, BufRead, Read, Write},
 };
 
+use crate::bufext::BufReadEofExt;
+
 use serde::de::Error as SerdeError;
 use serde::{de::DeserializeOwned, Deserialize, Serialize};
 
@@ -371,7 +373,7 @@ fn read_msg_text(inp: &mut dyn BufRead) -> io::Result<Option<String>> {
     let mut buf = String::new();
     loop {
         buf.clear();
-        if inp.read_line(&mut buf)? == 0 {
+        if inp.read_line_or_eof(&mut buf)? == 0 {
             return Ok(None);
         }
         if !buf.ends_with("\r\n") {
