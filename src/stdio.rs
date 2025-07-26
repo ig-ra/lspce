@@ -31,6 +31,14 @@ fn should_exit(exit_flag: &Arc<AtomicBool>, thread_name: &str) -> bool {
     exit
 }
 
+macro_rules! break_if_should_exit {
+    ($exit_flag:expr, $thread_name:expr) => {{
+        if should_exit($exit_flag, $thread_name) {
+            break;
+        }
+    }};
+}
+
 trait BufReadEofExt {
     /// read_line that returns an error on EOF. Normal BufReader is blocked reader and will return OK(0) on EOF
     fn read_line_or_eof(&mut self, buf: &mut String) -> io::Result<usize>;
@@ -74,11 +82,8 @@ pub(crate) fn stdio_transport(
     let writer_thread = thread::spawn(move || {
         let mut stdin = child_stdin;
         loop {
-            {
-                if should_exit(&exit_writer, "stdout") {
-                    break;
-                }
-            }
+            break_if_should_exit!(&exit_writer, "stdout");
+
             let recv_value = receiver_from_client.recv_timeout(std::time::Duration::from_millis(1));
             match recv_value {
                 Ok(r) => {
@@ -102,11 +107,8 @@ pub(crate) fn stdio_transport(
         let mut reader = std::io::BufReader::new(stdout);
 
         loop {
-            {
-                if should_exit(&exit_reader, "stdin") {
-                    break;
-                }
-            }
+            break_if_should_exit!(&exit_reader, "stdin");
+
             match Message::read(&mut reader) {
                 Ok(m) => {
                     if let Some(msg) = m {
@@ -153,11 +155,7 @@ pub(crate) fn stdio_transport(
         let mut reader = std::io::BufReader::new(stderr);
         let mut buffer = String::new();
         loop {
-            {
-                if should_exit(&exit_stderr, "stderr") {
-                    break;
-                }
-            }
+            break_if_should_exit!(&exit_stderr, "stderr");
 
             buffer.clear();
             match reader.read_line(&mut buffer) {
