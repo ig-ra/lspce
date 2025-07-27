@@ -361,7 +361,7 @@ impl Notification {
     }
 }
 
-fn read_msg_text(inp: &mut dyn BufRead) -> io::Result<Option<String>> {
+fn read_msg_text(inp: &mut dyn BufRead) -> io::Result<String> {
     fn invalid_data(msg: &str, line: &str) -> io::Error {
         io::Error::new(io::ErrorKind::InvalidData, format!("{}: {:?}", msg, line))
     }
@@ -371,10 +371,8 @@ fn read_msg_text(inp: &mut dyn BufRead) -> io::Result<Option<String>> {
 
     loop {
         line.clear();
-        // blocking read_line cannot return 0, unless EOF. The read_line_or_eof extension will return Err on EOF
-        if inp.read_line_or_eof(&mut line)? == 0 {
-            return Ok(None); // so this cannot actually happen, since Err will be propagated
-        }
+        inp.read_line_or_eof(&mut line)?; // read_line_or_eof returns Err on EOF
+
         if !line.ends_with("\r\n") {
             return Err(invalid_data("Malformed header (no CRLF)", &line));
         }
@@ -391,7 +389,7 @@ fn read_msg_text(inp: &mut dyn BufRead) -> io::Result<Option<String>> {
     inp.read_exact(&mut buf)?;
     let buf = String::from_utf8(buf).map_err(|_| invalid_data("Body isn't a valid UTF-8", &line))?;
 
-    Ok(Some(buf))
+    Ok(buf)
 }
 
 fn write_msg_text(out: &mut dyn Write, msg: &str) -> io::Result<()> {
@@ -403,7 +401,9 @@ fn write_msg_text(out: &mut dyn Write, msg: &str) -> io::Result<()> {
 
 #[cfg(test)]
 mod tests {
+    use super::read_msg_text;
     use super::{Message, Notification, Request, RequestId, Response, ResponseError};
+    use std::io::{self, BufReader};
 
     #[test]
     fn test_msg_serialization() {
@@ -539,12 +539,6 @@ mod tests {
             }
         }
     }
-}
-
-#[cfg(test)]
-mod read_msg_text_tests {
-    use super::read_msg_text;
-    use std::io::{self, BufReader};
 
     struct TestCase {
         name: &'static str,
@@ -553,7 +547,7 @@ mod read_msg_text_tests {
     }
 
     #[test]
-    fn test_read_msg_text_parametrized() {
+    fn test_read_msg_text() {
         let test_cases = vec![
             // valid cases --------------------------------------------------v
             TestCase { name: "Valid", input: b"Content-Length: 2\r\n\r\n{}", expected: Ok(Some("{}".to_string())) },
@@ -624,8 +618,7 @@ mod read_msg_text_tests {
             let result = read_msg_text(&mut reader);
 
             match (result, case.expected) {
-                (Ok(Some(res)), Ok(Some(exp))) => assert_eq!(res, exp, "Test case <{}> failed (text)", case.name),
-                (Ok(None), Ok(None)) => { /* success */ }
+                (Ok(res), Ok(Some(exp))) => assert_eq!(res, exp, "Test case <{}> failed (text)", case.name),
                 (Err(res_err), Err(exp_err_kind)) => {
                     assert_eq!(res_err.kind(), exp_err_kind, "Test case <{}> failed (err)", case.name)
                 }
