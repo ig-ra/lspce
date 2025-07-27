@@ -362,39 +362,34 @@ impl Notification {
 }
 
 fn read_msg_text(inp: &mut dyn BufRead) -> io::Result<Option<String>> {
-    fn invalid_data(error: impl Into<Box<dyn std::error::Error + Send + Sync>>) -> io::Error {
-        io::Error::new(io::ErrorKind::InvalidData, error)
-    }
-    macro_rules! invalid_data {
-        ($($tt:tt)*) => (invalid_data(format!($($tt)*)))
+    fn invalid_data(msg: &str, line: &str) -> io::Error {
+        io::Error::new(io::ErrorKind::InvalidData, format!("{}: {:?}", msg, line))
     }
 
-    let mut size = None;
-    let mut buf = String::new();
+    let mut content_length = None;
+    let mut line = String::new();
+
     loop {
-        buf.clear();
-        if inp.read_line_or_eof(&mut buf)? == 0 {
-            return Ok(None);
+        line.clear();
+        // blocking read_line cannot return 0, unless EOF. The read_line_or_eof extension will return Err on EOF
+        if inp.read_line_or_eof(&mut line)? == 0 {
+            return Ok(None); // so this cannot actually happen, since Err will be propagated
         }
-        if !buf.ends_with("\r\n") {
-            return Err(invalid_data!("malformed header: {:?}", buf));
+        if !line.ends_with("\r\n") {
+            return Err(invalid_data("Malformed header (no CRLF)", &line));
         }
-        let buf = &buf[..buf.len() - 2];
-        if buf.is_empty() {
-            break;
+        if line.len() == 2 {
+            break; // empty line, just "\r\n". This is the end of headers
         }
-        let mut parts = buf.splitn(2, ": ");
-        let header_name = parts.next().unwrap();
-        let header_value = parts.next().ok_or_else(|| invalid_data!("malformed header: {:?}", buf))?;
-        if header_name == "Content-Length" {
-            size = Some(header_value.parse::<usize>().map_err(invalid_data)?);
+        if let Some(rest) = &line[..line.len() - 2].strip_prefix("Content-Length: ") {
+            content_length = Some(rest.parse().map_err(|_| invalid_data("Invalid Content-Length value", &line))?);
         }
     }
-    let size: usize = size.ok_or_else(|| invalid_data!("no Content-Length"))?;
-    let mut buf = buf.into_bytes();
-    buf.resize(size, 0);
+
+    let size = content_length.ok_or_else(|| invalid_data("Missing Content-Length header", &line))?;
+    let mut buf = vec![0u8; size];
     inp.read_exact(&mut buf)?;
-    let buf = String::from_utf8(buf).map_err(invalid_data)?;
+    let buf = String::from_utf8(buf).map_err(|_| invalid_data("Body isn't a valid UTF-8", &line))?;
 
     Ok(Some(buf))
 }
@@ -541,6 +536,100 @@ mod tests {
             ] {
                 let should_succeed = type_name == expected_type;
                 assert_eq!(result_ok, should_succeed, "{} parse for: {}", type_name, json);
+            }
+        }
+    }
+}
+
+#[cfg(test)]
+mod read_msg_text_tests {
+    use super::read_msg_text;
+    use std::io::{self, BufReader};
+
+    struct TestCase {
+        name: &'static str,
+        input: &'static [u8],
+        expected: Result<Option<String>, io::ErrorKind>,
+    }
+
+    #[test]
+    fn test_read_msg_text_parametrized() {
+        let test_cases = vec![
+            // valid cases --------------------------------------------------v
+            TestCase { name: "Valid", input: b"Content-Length: 2\r\n\r\n{}", expected: Ok(Some("{}".to_string())) },
+            TestCase {
+                name: "Valid with 2 headers",
+                input: b"Content-Type: application/jsonrpc; charset=utf-8\r\nContent-Length: 2\r\n\r\n{}",
+                expected: Ok(Some("{}".to_string())),
+            },
+            TestCase { name: "Empty", input: b"Content-Length: 0\r\n\r\n", expected: Ok(Some("".to_string())) },
+            TestCase {
+                name: "Valid With junk",
+                input: b"Content-Length: 2\r\n\r\n{}junk",
+                expected: Ok(Some("{}".to_string())),
+            },
+            // invalid cases ------------------------------------------------v
+            TestCase {
+                name: "Malformed header (header part doesn't end with CRLF)",
+                input: b"Content-Length: 2\r\n{}",
+                expected: Err(io::ErrorKind::InvalidData),
+            },
+            TestCase {
+                name: "Malformed header (no colon)",
+                input: b"Content-Length 2\r\n\r\n",
+                expected: Err(io::ErrorKind::InvalidData),
+            },
+            TestCase {
+                name: "Malformed header (no space after colon)",
+                input: b"Content-Length:2\r\n\r\n{}",
+                expected: Err(io::ErrorKind::InvalidData),
+            },
+            TestCase {
+                name: "No mandatory Content-Length header",
+                input: b"Header: value\r\n\r\n{}",
+                expected: Err(io::ErrorKind::InvalidData),
+            },
+            TestCase {
+                name: "Malformed header (content-Length isn't a number)",
+                input: b"Content-Length: abc\r\n\r\n",
+                expected: Err(io::ErrorKind::InvalidData),
+            },
+            TestCase {
+                name: "Content shorter than Content-Length (EOF)",
+                input: b"Content-Length: 20\r\n\r\nshort",
+                expected: Err(io::ErrorKind::UnexpectedEof),
+            },
+            TestCase {
+                name: "EOF right after headers",
+                input: b"Content-Length: 10\r\n\r\n",
+                expected: Err(io::ErrorKind::UnexpectedEof),
+            },
+            TestCase { name: "Empty input (EOF)", input: b"", expected: Err(io::ErrorKind::UnexpectedEof) },
+            TestCase {
+                name: "Invalid UTF-8 in content",
+                input: b"Content-Length: 4\r\n\r\n\xff\xfe\xfd\xfc",
+                expected: Err(io::ErrorKind::InvalidData),
+            },
+            // edge cases --------------------------------------------------v
+            // will be handled as valid but wrong text (RCRLF instead of {}), since headers should END with \r\n\r\n sequence
+            TestCase {
+                name: "Additional CRLF",
+                input: b"Content-Length: 2\r\n\r\n\r\n{}",
+                expected: Ok(Some("\r\n".to_string())),
+            },
+        ];
+
+        for case in test_cases {
+            let mut reader = BufReader::new(case.input);
+            let result = read_msg_text(&mut reader);
+
+            match (result, case.expected) {
+                (Ok(Some(res)), Ok(Some(exp))) => assert_eq!(res, exp, "Test case <{}> failed (text)", case.name),
+                (Ok(None), Ok(None)) => { /* success */ }
+                (Err(res_err), Err(exp_err_kind)) => {
+                    assert_eq!(res_err.kind(), exp_err_kind, "Test case <{}> failed (err)", case.name)
+                }
+                (res, exp) => panic!("Test case '{}' failed: Expected {:?}, got {:?}", case.name, exp, res),
             }
         }
     }
