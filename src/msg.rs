@@ -301,12 +301,19 @@ impl Message {
     pub fn read(r: &mut impl BufRead) -> io::Result<Option<Message>> {
         Message::_read(r)
     }
+
+    /// Reads a message. Returns None on recoverable errors
     fn _read(r: &mut dyn BufRead) -> io::Result<Option<Message>> {
-        let text = match read_msg_text(r)? {
-            None => return Ok(None),
-            Some(text) => text,
+        let text = match read_msg_text(r) {
+            Ok(text) => text,
+            Err(e) if e.kind() == io::ErrorKind::InvalidData => return Ok(None), // malformed headers
+            Err(e) => return Err(e),
         };
-        let mut msg: Message = Message::from_str(&text)?;
+
+        let mut msg = match Message::from_str(&text) {
+            Ok(msg) => msg,
+            Err(_) => return Ok(None), // deserialization error
+        };
         msg.set_content(text);
         Ok(Some(msg))
     }
@@ -546,6 +553,22 @@ mod tests {
         expected: Result<Option<String>, io::ErrorKind>,
     }
 
+    fn run_test_cases<F>(cases: &[TestCase], runner: F)
+    where
+        F: Fn(&[u8]) -> Result<Option<String>, io::Error>,
+    {
+        for case in cases {
+            let msg = format!("Test case <{}> failed ", case.name);
+            let result = runner(case.input);
+            match (result, &case.expected) {
+                (Ok(Some(res)), Ok(Some(exp))) => assert_eq!(res, *exp, "{} (text)", msg),
+                (Ok(None), Ok(None)) => { /* recoverable error, success */ }
+                (Err(e), Err(exp)) => assert_eq!(e.kind(), *exp, "{} (err)", msg),
+                (res, exp) => panic!("{}: Expected {:?}, got {:?}", msg, exp, res),
+            }
+        }
+    }
+
     #[test]
     fn test_read_msg_text() {
         let test_cases = vec![
@@ -613,17 +636,71 @@ mod tests {
             },
         ];
 
-        for case in test_cases {
-            let mut reader = BufReader::new(case.input);
-            let result = read_msg_text(&mut reader);
+        run_test_cases(&test_cases, |input| {
+            let mut reader = BufReader::new(input);
+            read_msg_text(&mut reader).map(Some)
+        });
+    }
 
-            match (result, case.expected) {
-                (Ok(res), Ok(Some(exp))) => assert_eq!(res, exp, "Test case <{}> failed (text)", case.name),
-                (Err(res_err), Err(exp_err_kind)) => {
-                    assert_eq!(res_err.kind(), exp_err_kind, "Test case <{}> failed (err)", case.name)
-                }
-                (res, exp) => panic!("Test case '{}' failed: Expected {:?}, got {:?}", case.name, exp, res),
+    #[test]
+    fn test_message_read() {
+        let cases = [
+            // // Valid message
+            TestCase {
+                name: "Valid Message / Notification",
+                input: b"Content-Length: 17\r\n\r\n{\"method\":\"exit\"}",
+                expected: Ok(Some("{\"method\":\"exit\"}".to_string())),
+            },
+            TestCase {
+                name: "Valid Message / Notification 2",
+                input: b"Content-Length: 18\r\n\r\n{\"method\":\"exit\"} junk",
+                expected: Ok(Some("{\"method\":\"exit\"} ".to_string())),
+            },
+            // recoverable --------------------------------------------------v
+            // malformed headers -> io::ErrorKind::InvalidData
+            TestCase {
+                name: "InvaldData: No space after colon",
+                input: b"Content-Length:17\r\n\r\n{\"method\":\"exit\"}",
+                expected: Ok(None),
+            },
+            TestCase {
+                name: "InvaldData: No content length",
+                input: b"\r\n\r\n{\"method\":\"exit\"}",
+                expected: Ok(None),
+            },
+            TestCase {
+                name: "InvaldData: Missing CRLF",
+                input: b"Content-Length: 17\r\n{\"method\":\"exit\"}",
+                expected: Ok(None),
+            },
+            // deserialization > serde_json::Error
+            TestCase { name: "Serde: empty JSON", input: b"Content-Length: 2\r\n\r\n{}", expected: Ok(None) },
+            TestCase {
+                name: "Serde: not a Message JSON",
+                input: b"Content-Length: 13\r\n\r\n{\"foo\":\"bar\"}",
+                expected: Ok(None),
+            },
+            TestCase {
+                name: "Serde: Malformed JSON",
+                input: b"Content-Length: 15\r\n\r\n{\"method\":true}",
+                expected: Ok(None),
+            },
+            // unrecoverable ------------------------------------------------v
+            TestCase {
+                name: "Closed pipe / not enough data",
+                input: b"Content-Length: 10\r\n\r\n{",
+                expected: Err(io::ErrorKind::UnexpectedEof),
+            },
+            TestCase { name: "Closed pipe / no data", input: b"", expected: Err(io::ErrorKind::UnexpectedEof) },
+        ];
+
+        run_test_cases(&cases, |input| {
+            let mut reader = BufReader::new(input);
+            match Message::_read(&mut reader) {
+                Ok(Some(msg)) => Ok(Some(msg.content().to_string())),
+                Ok(None) => Ok(None),
+                Err(e) => Err(e),
             }
-        }
+        });
     }
 }
