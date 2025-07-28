@@ -77,7 +77,8 @@ pub(crate) fn stdio_transport(
                             Logger::error(&format!("[LSP send] - error {}", e));
                         }
                     } else {
-                        thread::sleep(std::time::Duration::from_millis(1));
+                        // recoverable error (parsing/reading/de-serialization). log and continue
+                        Logger::error("[LSP stdout] - got None from Message::read");
                     }
                 }
                 Err(e) => {
