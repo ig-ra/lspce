@@ -82,10 +82,12 @@ pub(crate) fn stdio_transport(
                     }
                 }
                 Err(e) => {
+                    exit_reader.store(true, Ordering::Relaxed); // unrecoverable error, signal exit
                     Logger::error(&format!("[LSP stdout] - error {}", e));
 
                     let msg = Response::new_err(RequestId::from(1), -32603, format!("{}", e));
                     let _ = sender_to_client.send(Message::Response(msg));
+                    return Err(e);
                 }
             }
         }
