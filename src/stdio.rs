@@ -68,8 +68,7 @@ pub(crate) fn stdio_transport(
     let exit_reader = Arc::clone(&exit);
     let (sender_to_client, receiver_for_client) = bounded::<Message>(10);
     let reader_thread = thread::spawn(move || {
-        let mut stdout = child_stdout;
-        let mut reader = std::io::BufReader::new(stdout);
+        let mut reader = std::io::BufReader::new(child_stdout);
 
         loop {
             bail_if_should_exit!(&exit_reader, "stdout");
@@ -114,8 +113,7 @@ pub(crate) fn stdio_transport(
 
     let exit_stderr = Arc::clone(&exit);
     let stderr_thread = thread::spawn(move || -> io::Result<()> {
-        let mut stderr = child_stderr;
-        let mut reader = std::io::BufReader::new(stderr);
+        let mut reader = std::io::BufReader::new(child_stderr);
         let mut buffer = String::new();
         loop {
             bail_if_should_exit!(&exit_stderr, "stderr");
