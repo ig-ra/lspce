@@ -52,13 +52,9 @@ pub(crate) fn stdio_transport(
 
             let recv_value = receiver_from_client.recv_timeout(std::time::Duration::from_millis(1));
             match recv_value {
-                Ok(r) => {
-                    Logger::debug(&format!(
-                        "stdio write {}",
-                        serde_json::to_string_pretty(&r).unwrap_or("invalid json".to_string())
-                    ));
-
-                    r.write(&mut stdin)
+                Ok(msg) => {
+                    Logger::debug(&format!("stdio write {}", msg));
+                    msg.write(&mut stdin)
                 }
                 Err(t) => Ok(()),
             };
@@ -76,26 +72,10 @@ pub(crate) fn stdio_transport(
             match Message::read(&mut reader) {
                 Ok(m) => {
                     if let Some(msg) = m {
-                        if log_enabled(LOG_DEBUG) {
-                            let msg_log = msg.clone();
-                            match msg_log {
-                                Message::Request(r) => Logger::debug(&format!(
-                                    "stdio read request {}",
-                                    serde_json::to_string_pretty(&r).unwrap_or(r.content)
-                                )),
-                                Message::Response(r) => Logger::debug(&format!(
-                                    "stdio read response {}",
-                                    serde_json::to_string_pretty(&r).unwrap_or(r.content)
-                                )),
-                                Message::Notification(r) => Logger::debug(&format!(
-                                    "stdio read notification {}",
-                                    serde_json::to_string_pretty(&r).unwrap_or(r.content)
-                                )),
-                            }
-                        }
                         let r = sender_to_client.send(msg);
                         if r.is_err() {
                             Logger::error(&format!("stdio read error {}", r.err().unwrap()));
+                        Logger::debug(&format!("[LSP stdout] {}", msg));
                         }
                     } else {
                         thread::sleep(std::time::Duration::from_millis(1));
