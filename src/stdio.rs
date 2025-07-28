@@ -82,10 +82,10 @@ pub(crate) fn stdio_transport(
                     }
                 }
                 Err(e) => {
-                    Logger::error(&format!("stdio read error {}", e));
+                    Logger::error(&format!("[LSP stdout] - error {}", e));
 
                     let msg = Response::new_err(RequestId::from(1), -32603, format!("{}", e));
-                    sender_to_client.send(Message::Response(msg));
+                    let _ = sender_to_client.send(Message::Response(msg));
                 }
             }
         }
