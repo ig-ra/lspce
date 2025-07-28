@@ -124,11 +124,7 @@ pub(crate) fn stdio_transport(
             break_if_should_exit!(&exit_stderr, "stderr");
 
             buffer.clear();
-            match reader.read_line(&mut buffer) {
-                Ok(0) => {
-                    Logger::error("[LSP stderr] stderr closed");
-                    break;
-                }
+            match reader.read_line_or_eof(&mut buffer) {
                 Ok(_) => {
                     Logger::error(&format!("[LSP stderr] {}", &buffer.trim_end()));
                 }
