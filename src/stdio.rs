@@ -72,10 +72,9 @@ pub(crate) fn stdio_transport(
             match Message::read(&mut reader) {
                 Ok(m) => {
                     if let Some(msg) = m {
-                        let r = sender_to_client.send(msg);
-                        if r.is_err() {
-                            Logger::error(&format!("stdio read error {}", r.err().unwrap()));
                         Logger::debug(&format!("[LSP stdout] {}", msg));
+                        if let Err(e) = sender_to_client.send(msg) {
+                            Logger::error(&format!("[LSP send] - error {}", e));
                         }
                     } else {
                         thread::sleep(std::time::Duration::from_millis(1));
