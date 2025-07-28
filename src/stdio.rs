@@ -31,10 +31,10 @@ fn should_exit(exit_flag: &Arc<AtomicBool>, thread_name: &str) -> bool {
     exit
 }
 
-macro_rules! break_if_should_exit {
+macro_rules! bail_if_should_exit {
     ($exit_flag:expr, $thread_name:expr) => {{
         if should_exit($exit_flag, $thread_name) {
-            break;
+            return Ok(());
         }
     }};
 }
@@ -48,7 +48,7 @@ pub(crate) fn stdio_transport(
     let writer_thread = thread::spawn(move || {
         let mut stdin = child_stdin;
         loop {
-            break_if_should_exit!(&exit_writer, "stdout");
+            bail_if_should_exit!(&exit_writer, "stdin");
 
             let recv_value = receiver_from_client.recv_timeout(std::time::Duration::from_millis(1));
             match recv_value {
@@ -63,7 +63,6 @@ pub(crate) fn stdio_transport(
                 Err(t) => Ok(()),
             };
         }
-        Ok(())
     });
 
     let exit_reader = Arc::clone(&exit);
@@ -73,7 +72,7 @@ pub(crate) fn stdio_transport(
         let mut reader = std::io::BufReader::new(stdout);
 
         loop {
-            break_if_should_exit!(&exit_reader, "stdin");
+            bail_if_should_exit!(&exit_reader, "stdout");
 
             match Message::read(&mut reader) {
                 Ok(m) => {
@@ -111,8 +110,6 @@ pub(crate) fn stdio_transport(
                 }
             }
         }
-
-        Ok(())
     });
 
     let exit_stderr = Arc::clone(&exit);
@@ -121,7 +118,7 @@ pub(crate) fn stdio_transport(
         let mut reader = std::io::BufReader::new(stderr);
         let mut buffer = String::new();
         loop {
-            break_if_should_exit!(&exit_stderr, "stderr");
+            bail_if_should_exit!(&exit_stderr, "stderr");
 
             buffer.clear();
             match reader.read_line_or_eof(&mut buffer) {
@@ -136,7 +133,6 @@ pub(crate) fn stdio_transport(
                 }
             }
         }
-        Ok(())
     });
 
     let threads = make_io_threads(reader_thread, writer_thread, Some(stderr_thread));
