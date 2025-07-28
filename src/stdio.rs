@@ -133,10 +133,10 @@ pub(crate) fn stdio_transport(
                     Logger::error(&format!("[LSP stderr] {}", &buffer.trim_end()));
                 }
                 Err(e) => {
-                    if e.kind() != std::io::ErrorKind::Interrupted {
-                        Logger::error(&format!("[LSP stderr] read error: {}", e));
-                        return Err(e); // Exit on unrecoverable errors
-                    }
+                    // we may signal coordinated shutdown on error here as well
+                    // but let's leave the decision to stdin/stdout threads
+                    Logger::error(&format!("[LSP stderr] - error: {}", e));
+                    return Err(e); // Exit on unrecoverable errors including pipe close/EOF
                 }
             }
         }
