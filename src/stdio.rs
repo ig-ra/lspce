@@ -48,7 +48,7 @@ pub(crate) fn stdio_transport(
     let writer_thread = thread::spawn(move || {
         let mut stdin = child_stdin;
         loop {
-            bail_if_should_exit!(&exit_writer, "stdin");
+            bail_if_should_exit!(&exit_writer, "<");
 
             let recv_value = r_to_lsp.recv_timeout(std::time::Duration::from_millis(1));
             match recv_value {
@@ -67,7 +67,7 @@ pub(crate) fn stdio_transport(
         let mut reader = std::io::BufReader::new(child_stdout);
 
         loop {
-            bail_if_should_exit!(&exit_reader, "stdout");
+            bail_if_should_exit!(&exit_reader, ">");
 
             match Message::read(&mut reader) {
                 Ok(m) => {
@@ -96,7 +96,7 @@ pub(crate) fn stdio_transport(
         let mut reader = std::io::BufReader::new(child_stderr);
         let mut buffer = String::new();
         loop {
-            bail_if_should_exit!(&exit_stderr, "stderr");
+            bail_if_should_exit!(&exit_stderr, "!");
 
             buffer.clear();
             match reader.read_line_limited_or_eof(&mut buffer, MAX_STDERR_LINE_LEN) {
