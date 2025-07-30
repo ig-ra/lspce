@@ -44,13 +44,13 @@ pub(crate) fn stdio_transport(
     mut child_stdin: ChildStdin, mut child_stdout: ChildStdout, mut child_stderr: ChildStderr, exit: Arc<AtomicBool>,
 ) -> (Sender<Message>, Receiver<Message>, IoThreads) {
     let exit_writer = Arc::clone(&exit);
-    let (sender_for_client, receiver_from_client) = bounded::<Message>(10);
+    let (s_to_lsp, r_to_lsp) = bounded::<Message>(10);
     let writer_thread = thread::spawn(move || {
         let mut stdin = child_stdin;
         loop {
             bail_if_should_exit!(&exit_writer, "stdin");
 
-            let recv_value = receiver_from_client.recv_timeout(std::time::Duration::from_millis(1));
+            let recv_value = r_to_lsp.recv_timeout(std::time::Duration::from_millis(1));
             match recv_value {
                 Ok(msg) => {
                     Logger::debug(&format!("stdio write {}", msg));
@@ -62,7 +62,7 @@ pub(crate) fn stdio_transport(
     });
 
     let exit_reader = Arc::clone(&exit);
-    let (sender_to_client, receiver_for_client) = bounded::<Message>(10);
+    let (s_from_lsp, r_from_lsp) = bounded::<Message>(10);
     let reader_thread = thread::spawn(move || {
         let mut reader = std::io::BufReader::new(child_stdout);
 
@@ -72,7 +72,7 @@ pub(crate) fn stdio_transport(
             match Message::read(&mut reader) {
                 Ok(m) => {
                     if let Some(msg) = m {
-                        if let Err(e) = sender_to_client.send(msg) {
+                        if let Err(e) = s_from_lsp.send(msg) {
                             Logger::error(&format!("[LSP send] - error {}", e));
                         }
                     }
@@ -83,7 +83,7 @@ pub(crate) fn stdio_transport(
                     Logger::error(&format!("[LSP>] - error {}", e));
 
                     let msg = Response::new_err(RequestId::from(1), -32603, format!("{}", e));
-                    let _ = sender_to_client.send(Message::Response(msg));
+                    let _ = s_from_lsp.send(Message::Response(msg));
                     return Err(e);
                 }
             }
@@ -117,7 +117,7 @@ pub(crate) fn stdio_transport(
     });
 
     let threads = make_io_threads(reader_thread, writer_thread, Some(stderr_thread));
-    (sender_for_client, receiver_for_client, threads)
+    (s_to_lsp, r_from_lsp, threads)
 }
 
 // Creates an IoThreads
