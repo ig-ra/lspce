@@ -368,7 +368,9 @@ impl Notification {
     }
 }
 
-fn read_msg_text(inp: &mut dyn BufRead) -> io::Result<String> {
+const MAX_LSP_HEADER_LEN: usize = 1024;
+
+fn read_msg_text(mut inp: &mut dyn BufRead) -> io::Result<String> {
     fn invalid_data(msg: &str, line: &str) -> io::Error {
         io::Error::new(io::ErrorKind::InvalidData, format!("{}: {:?}", msg, line))
     }
@@ -378,7 +380,7 @@ fn read_msg_text(inp: &mut dyn BufRead) -> io::Result<String> {
 
     loop {
         line.clear();
-        inp.read_line_or_eof(&mut line)?; // read_line_or_eof returns Err on EOF
+        inp.read_line_limited_or_eof(&mut line, MAX_LSP_HEADER_LEN)?; // err on EOF or long lines
 
         if !line.ends_with("\r\n") {
             return Err(invalid_data("Malformed header (no CRLF)", &line));
@@ -408,8 +410,9 @@ fn write_msg_text(out: &mut dyn Write, msg: &str) -> io::Result<()> {
 
 #[cfg(test)]
 mod tests {
-    use super::read_msg_text;
-    use super::{Message, Notification, Request, RequestId, Response, ResponseError};
+    use super::{
+        read_msg_text, Message, Notification, Request, RequestId, Response, ResponseError, MAX_LSP_HEADER_LEN,
+    };
     use std::io::{self, BufReader};
 
     #[test]
@@ -571,6 +574,14 @@ mod tests {
 
     #[test]
     fn test_read_msg_text() {
+        use std::sync::LazyLock;
+        static LONG_HEADER: LazyLock<Vec<u8>> = LazyLock::new(|| {
+            let mut v = b"Content-Length: 2".to_vec();
+            v.extend(std::iter::repeat(b' ').take(MAX_LSP_HEADER_LEN)); // fill to max length with spaces
+            v.extend_from_slice(b"\r\n\r\n{}"); // valid, but will be discarded due to length limit
+            v
+        });
+
         let test_cases = vec![
             // valid cases --------------------------------------------------v
             TestCase { name: "Valid", input: b"Content-Length: 2\r\n\r\n{}", expected: Ok(Some("{}".to_string())) },
@@ -634,6 +645,8 @@ mod tests {
                 input: b"Content-Length: 2\r\n\r\n\r\n{}",
                 expected: Ok(Some("\r\n".to_string())),
             },
+            // long header exceeding MAX_LSP_HEADER_LEN. Fail to find \r\n in
+            TestCase { name: "Long headers", input: &LONG_HEADER, expected: Err(io::ErrorKind::QuotaExceeded) },
         ];
 
         run_test_cases(&test_cases, |input| {
@@ -644,6 +657,9 @@ mod tests {
 
     #[test]
     fn test_message_read() {
+        /// valid and invalid cases for Message::read.
+        /// invalid, but recoverable cases should return Ok(None),
+        /// while unrecoverable cases should result in Err (e.g. unexpectedEof)
         let cases = [
             // // Valid message
             TestCase {
@@ -673,7 +689,7 @@ mod tests {
                 input: b"Content-Length: 17\r\n{\"method\":\"exit\"}",
                 expected: Ok(None),
             },
-            // deserialization > serde_json::Error
+            // deserialization -> serde_json::Error
             TestCase { name: "Serde: empty JSON", input: b"Content-Length: 2\r\n\r\n{}", expected: Ok(None) },
             TestCase {
                 name: "Serde: not a Message JSON",
