@@ -3,7 +3,7 @@ use std::{
     io::{self, BufRead, Read, Write},
 };
 
-use crate::bufext::BufReadEofExt;
+use crate::{bufext::BufReadEofExt, logger::Logger};
 
 use serde::de::Error as SerdeError;
 use serde::{de::DeserializeOwned, Deserialize, Serialize};
@@ -299,7 +299,18 @@ impl Message {
     }
 
     pub fn read(r: &mut impl BufRead) -> io::Result<Option<Message>> {
-        Message::_read(r)
+        match Message::_read(r) {
+            Ok(Some(msg)) => {
+                Logger::trace(&format!("[LSP>] {}", msg));
+                Ok(Some(msg))
+            }
+            Ok(None) => {
+                // recoverable error (parsing/reading/de-serialization)
+                Logger::error("[LSP>] - skipping malformed message/headers");
+                Ok(None) // recoverable error
+            }
+            other => other,
+        }
     }
 
     /// Reads a message. Returns None on recoverable errors

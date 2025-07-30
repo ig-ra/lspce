@@ -72,18 +72,15 @@ pub(crate) fn stdio_transport(
             match Message::read(&mut reader) {
                 Ok(m) => {
                     if let Some(msg) = m {
-                        Logger::debug(&format!("[LSP stdout] {}", msg));
                         if let Err(e) = sender_to_client.send(msg) {
                             Logger::error(&format!("[LSP send] - error {}", e));
                         }
-                    } else {
-                        // recoverable error (parsing/reading/de-serialization). log and continue
-                        Logger::error("[LSP stdout] - got None from Message::read");
                     }
+                    // do nothing on OK(None) - no messsage to handle (malformed). Just continue
                 }
                 Err(e) => {
                     exit_reader.store(true, Ordering::Relaxed); // unrecoverable error, signal exit
-                    Logger::error(&format!("[LSP stdout] - error {}", e));
+                    Logger::error(&format!("[LSP>] - error {}", e));
 
                     let msg = Response::new_err(RequestId::from(1), -32603, format!("{}", e));
                     let _ = sender_to_client.send(Message::Response(msg));
@@ -104,15 +101,15 @@ pub(crate) fn stdio_transport(
             buffer.clear();
             match reader.read_line_limited_or_eof(&mut buffer, MAX_STDERR_LINE_LEN) {
                 Ok(_) => {
-                    Logger::error(&format!("[LSP stderr] {}", &buffer.trim_end()));
+                    Logger::error(&format!("[LSP!] {}", &buffer.trim_end()));
                 }
                 Err(e) if e.kind() == io::ErrorKind::QuotaExceeded => {
-                    Logger::error(&format!("[LSP stderr] - ...Truncated.. {}", &buffer.trim_end()));
+                    Logger::error(&format!("[LSP!] - ...Truncated.. {}", &buffer.trim_end()));
                 }
                 Err(e) => {
                     // we may signal coordinated shutdown on error here as well
                     // but let's leave the decision to stdin/stdout threads
-                    Logger::error(&format!("[LSP stderr] - error: {}", e));
+                    Logger::error(&format!("[LSP!] - error: {}", e));
                     return Err(e); // Exit on unrecoverable errors including pipe close/EOF
                 }
             }

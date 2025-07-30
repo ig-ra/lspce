@@ -36,8 +36,6 @@ fn make_reader(stream: TcpStream, exit: Arc<AtomicBool>) -> (Receiver<Message>, 
     let reader_thread = thread::spawn(move || {
         let mut buf_read = BufReader::new(stream);
         while let Some(msg) = Message::read(&mut buf_read).unwrap() {
-            Logger::debug(&format!("socket read {:#?}", &msg));
-
             match sender_to_client.send(msg) {
                 Ok(_) => {}
                 Err(e) => {
