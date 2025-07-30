@@ -93,6 +93,7 @@ pub(crate) fn stdio_transport(
         }
     });
 
+    const MAX_STDERR_LINE_LEN: usize = 4096;
     let exit_stderr = Arc::clone(&exit);
     let stderr_thread = thread::spawn(move || -> io::Result<()> {
         let mut reader = std::io::BufReader::new(child_stderr);
@@ -101,9 +102,12 @@ pub(crate) fn stdio_transport(
             bail_if_should_exit!(&exit_stderr, "stderr");
 
             buffer.clear();
-            match reader.read_line_or_eof(&mut buffer) {
+            match reader.read_line_limited_or_eof(&mut buffer, MAX_STDERR_LINE_LEN) {
                 Ok(_) => {
                     Logger::error(&format!("[LSP stderr] {}", &buffer.trim_end()));
+                }
+                Err(e) if e.kind() == io::ErrorKind::QuotaExceeded => {
+                    Logger::error(&format!("[LSP stderr] - ...Truncated.. {}", &buffer.trim_end()));
                 }
                 Err(e) => {
                     // we may signal coordinated shutdown on error here as well
