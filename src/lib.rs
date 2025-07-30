@@ -1,5 +1,6 @@
 #![allow(unused)]
 
+mod bufext;
 mod connection;
 pub mod logger;
 mod msg;
