@@ -11,7 +11,7 @@ mod stdio;
 mod tests;
 
 use anyhow::{anyhow, bail, Context};
-use connection::Connection;
+use crossbeam_channel::{Receiver, Sender};
 use emacs::{defun, Env, IntoLisp, Result, Value};
 use logger::Logger;
 use lspce_macros::defun_safe;
@@ -119,7 +119,7 @@ pub struct LspServer {
     pub child: Option<Child>,
     pub server_info: LspServerInfo,
     pub status: u8,
-    transport: Arc<Mutex<Option<Connection>>>,
+    sender: Sender<Message>,
     transport_threads: Option<IoThreads>,
     dispatcher: Option<thread::JoinHandle<()>>,
     server_data: Arc<Mutex<LspServerData>>,
@@ -149,7 +149,9 @@ impl LspServer {
         let stdout = child.stdout.take().context("Failed to obtain LSP server's stdout")?;
         let stderr = child.stderr.take().context("Failed to obtain LSP server's stderr")?;
 
-        let (mut transport, mut transport_threads) = Connection::stdio(stdin, stdout, stderr);
+        let exit = Arc::new(AtomicBool::new(false));
+        let (sender, receiver, mut transport_threads) =
+            crate::connection::stdio(stdin, stdout, stderr, Arc::clone(&exit));
 
         let mut server_info = LspServerInfo::new(child.id());
         if let Some(name) = std::path::Path::new(cmd).file_name().and_then(|n| n.to_str()) {
@@ -160,23 +162,20 @@ impl LspServer {
             child: Some(child),
             server_info: server_info,
             status: SERVER_STATUS_STARTING,
-            transport: Arc::new(Mutex::new(Some(transport))),
+            sender,
             transport_threads: Some(transport_threads),
             dispatcher: None,
             server_data: Arc::new(Mutex::new(LspServerData::new())),
-            exit: Arc::new(AtomicBool::new(false)),
+            exit,
         };
 
-        server.dispatcher = Some(LspServer::start_dispatcher(
-            Arc::clone(&server.transport),
-            Arc::clone(&server.exit),
-            Arc::clone(&server.server_data),
-        ));
+        server.dispatcher =
+            Some(LspServer::start_dispatcher(receiver, Arc::clone(&server.exit), Arc::clone(&server.server_data)));
         Ok(server)
     }
 
     fn start_dispatcher(
-        transport: Arc<Mutex<Option<Connection>>>, exit: Arc<AtomicBool>, server_data: Arc<Mutex<LspServerData>>,
+        receiver: Receiver<Message>, exit: Arc<AtomicBool>, server_data: Arc<Mutex<LspServerData>>,
     ) -> thread::JoinHandle<()> {
         let handle = thread::spawn(move || loop {
             if exit.load(Ordering::Relaxed) {
@@ -184,9 +183,9 @@ impl LspServer {
             }
 
             let mut message: Option<Message> = None;
-            {
-                let transport = transport.lock().unwrap();
-                message = transport.as_ref().unwrap().read();
+            match receiver.recv_timeout(Duration::from_millis(1)) {
+                Ok(msg) => message = Some(msg),
+                Err(_) => {}
             }
 
             if let Some(m) = message {
@@ -295,13 +294,7 @@ impl LspServer {
     }
 
     pub fn write<M: Into<Message>>(&self, msg: M) -> Result<()> {
-        self.transport
-            .lock()
-            .map_err(|_| anyhow!("transport mutex poisoned"))?
-            .as_ref()
-            .context("transport not established")?
-            .write(msg.into())
-            .context("failed to write to transport")
+        self.sender.send(msg.into()).context("failed to write to transport")
     }
 
     pub fn read_response(&self) -> Option<Response> {
@@ -361,8 +354,8 @@ impl LspServer {
     }
 
     pub fn exit_transport(&self) {
-        let transport = self.transport.lock().unwrap();
-        transport.to_exit();
+        // FIXME: self.sender.close(); // signal by closing channel?
+        self.exit.store(true, Ordering::Relaxed);
     }
 
     /// Kill the child process (if any) and wait for it to exit, avoiding zombies.
