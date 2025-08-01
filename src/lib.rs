@@ -702,7 +702,7 @@ pub fn shutdown_server(mut server: LspServer, req: Request) -> Result<Option<Exi
 
     let req_id = req.id.clone();
     Logger::debug(format!("sent shutdown request for {}: {:?}", name_id, req));
-    let _ = _request_async(&mut server, req);
+    let _ = server.write(req);
 
     let start_time = Instant::now();
     let shutdown_timeout = GRACEFUL_SHUTDOWN_TIMEOUT;
