@@ -82,6 +82,7 @@ const GRACEFUL_SHUTDOWN_TIMEOUT: Duration = Duration::from_secs(3);
 const KILL_WAIT_TIMEOUT: Duration = GRACEFUL_SHUTDOWN_TIMEOUT;
 const MAX_NOTIFICATIONS: usize = 10;
 const DISPATCHER_SLEEP: Duration = Duration::from_millis(1);
+const REAPER_INTERVAL: Duration = Duration::from_secs(5);
 
 struct LspServerData {
     latest_request_id: RequestId,
@@ -488,6 +489,36 @@ fn projects() -> &'static Arc<Mutex<HashMap<String, Project>>> {
     &PROJECTS
 }
 
+/// A background thread that periodically checks for and cleans up dead LSP servers.
+///
+/// A server is considered dead if its dispatcher thread has terminated or its exit
+/// flag has been set due to an I/O error.
+///
+/// This function iterates through all servers and, upon finding a dead one, takes
+/// ownership of it. This leaves `None` in its place in the map and immediately
+/// triggers the `LspServer::drop` implementation, which ensures resource teardown.
+fn reap_dead_servers() {
+    loop {
+        thread::sleep(REAPER_INTERVAL);
+        let mut projects = projects().lock().unwrap();
+
+        for project in projects.values_mut() {
+            for server_option in project.servers.values_mut() {
+                if let Some(server) = server_option {
+                    let exit_requested = server.exit.load(Ordering::Relaxed);
+                    let dispatcher_finished = server.dispatcher.as_ref().map_or(true, |h| h.is_finished());
+
+                    if exit_requested || dispatcher_finished {
+                        Logger::info(format!("Reaper detected dead server: <{}>. Dropping", server.name_id));
+                        // Take ownership, causing server to be dropped, which will trigger teardown logic
+                        let _ = server_option.take();
+                    }
+                }
+            }
+        }
+    }
+}
+
 // Emacs won't load the module without this.
 #[cfg(not(test))]
 emacs::plugin_is_GPL_compatible!();
@@ -506,6 +537,7 @@ impl EnvExt for Env {
 #[cfg(not(test))]
 #[emacs::module(name("lspce-module"))]
 fn init(env: &Env) -> Result<Value<'_>> {
+    thread::spawn(reap_dead_servers);
     env.lspce_message("Done loading")
 }
 
