@@ -255,6 +255,7 @@ impl LspServer {
                                 "Latest response id is {}, current response id {}",
                                 server_data.latest_response_id, &id
                             ));
+                            // FIXME: what about String ids? how we define order?
                             if server_data.latest_response_id < id {
                                 server_data.latest_response_id = id;
                                 server_data.latest_response_tick = request_tick;
@@ -273,21 +274,20 @@ impl LspServer {
                     Message::Notification(r) => {
                         // cache diagnostics so they won't pour into Emacs
                         if r.method == "textDocument/publishDiagnostics" {
-                                Ok(params) => {
-                            let uri_string: String = params.uri.into();
-                            let mut file_info = FileInfo::new(&uri_string);
-                            // cache no more than MAX_DIAGNOSTICS_COUNT diagnostics
-                            let max_diagnostic_count = MAX_DIAGNOSTICS_COUNT.load(Ordering::Relaxed);
                             match serde_json::from_value::<PublishDiagnosticsParams>(r.params) {
+                                Ok(mut params) => {
+                                    let uri_string: String = params.uri.to_string();
+                                    let mut file_info = FileInfo::new(&uri_string);
+                                    // cache no more than MAX_DIAGNOSTICS_COUNT diagnostics
+                                    let max_diagnostic_count = MAX_DIAGNOSTICS_COUNT.load(Ordering::Relaxed);
                                     if max_diagnostic_count >= 0
                                         && params.diagnostics.len() > max_diagnostic_count as usize
                                     {
-                                params.diagnostics.truncate(max_diagnostic_count as usize);
-                            }
-                            file_info.diagnostics = params.diagnostics;
-
-                            let mut server_data = server_data.lock().unwrap();
-                            server_data.file_infos.insert(uri_string, file_info);
+                                        params.diagnostics.truncate(max_diagnostic_count as usize);
+                                    }
+                                    file_info.diagnostics = params.diagnostics;
+                                    let mut server_data = server_data.lock().unwrap();
+                                    server_data.file_infos.insert(uri_string, file_info);
                                 }
                                 Err(e) => {
                                     // parsing failed. Skip this notification
@@ -670,14 +670,15 @@ pub fn initialize(env: &Env, server: &mut LspServer, req: Request, timeout: Dura
     let start_time = Instant::now();
     loop {
         if let Some(response) = server.read_response() {
-            if let Some(error) = response.error {
+            if let Some(error) = &response.error {
                 bail!("LSP error: {:?}", error);
             }
 
             // FIXME: why do we need pretty? what do we do after?
             Logger::info(format!("initialize response {}", &response));
 
-            let ir: InitializeResult = serde_json::from_value(response.result.context("Empty initialize response")?)?;
+            let ir: InitializeResult =
+                serde_json::from_value(response.result.context("Empty initialize response")?.clone())?;
 
             let initialized = Notification::new("initialized", InitializedParams {})?;
             server.write(initialized)?;
@@ -754,8 +755,12 @@ fn server(env: &Env, root_uri: String, file_type: String) -> Result<Option<Strin
 }
 
 fn _request_async(server: &mut LspServer, req: Request) -> Result<Option<bool>> {
-    let request_tick = req.request_tick.as_ref().context("no request_tick in request")?;
-    server.update_request_info(req.id.clone(), request_tick.clone());
+    let request_tick = req.request_tick.as_ref().map(|s| s.clone()).unwrap_or_else(|| {
+        use std::time::{SystemTime, UNIX_EPOCH};
+        let now = SystemTime::now().duration_since(UNIX_EPOCH).unwrap();
+        format!("{}.{}", now.as_secs(), now.subsec_micros())
+    });
+    server.update_request_info(req.id.clone(), request_tick);
 
     // TODO: should we let LSP server to manage and clear diagnostics and remove this entirely?
 
