@@ -472,8 +472,8 @@ impl Drop for LspServer {
 }
 
 struct Project {
-    pub root_uri: String,                    //
-    pub servers: HashMap<String, LspServer>, // map each language_id to a lsp server
+    pub root_uri: String, // root URI of the project, e.g. "file:///home/user/project"
+    pub servers: HashMap<String, Option<LspServer>>, // map each language_id to a lsp server
 }
 
 impl Project {
@@ -595,13 +595,13 @@ where
 {
     let caller = Some(Location::caller());
     with_project(env, root_uri, caller, |project| match project.servers.get_mut(file_type) {
-        Some(server) => {
+        Some(Some(server)) => {
             if server.status != SERVER_STATUS_RUNNING {
                 env_message_and_bail!(env, @ caller, "LSP server for {}({}) is not ready", root_uri, file_type)
             }
             f(server)
         }
-        None => {
+        _ => {
             env_message_and_bail!(env, @ caller, "No LSP server for {}({})", root_uri, file_type)
         }
     })
@@ -635,7 +635,7 @@ fn connect(
     let mut projects = projects().lock().unwrap();
 
     if let Some(p) = projects.get(&root_uri) {
-        if let Some(s) = p.servers.get(&lsp_type) {
+        if let Some(Some(s)) = p.servers.get(&lsp_type) {
             Logger::info(format!("Using existing LSP server {}", prj_name_type));
             return Ok(Some(serde_json::to_string(&s.server_info).context("failed to serialize server info")?));
         }
@@ -655,7 +655,7 @@ fn connect(
     let server_info = server.server_info.clone();
 
     let project = projects.entry(root_uri.clone()).or_insert_with(|| Project::new(root_uri));
-    project.servers.insert(lsp_type, server);
+    project.servers.insert(lsp_type, Some(server));
 
     Logger::info(format!("Connected to server successfully. server capabilities {}", &server_info.capabilities));
     Ok(Some(serde_json::to_string(&server_info)?))
@@ -724,17 +724,16 @@ fn shutdown_orchestrator(mut server: LspServer, req: Request) {
 #[defun_safe]
 #[defun]
 fn shutdown(env: &Env, root_uri: String, file_type: String, request: String) -> Result<Option<bool>> {
-    with_project(env, &root_uri, None, |project| match project.servers.remove(&file_type) {
-        Some(server) => {
+    with_project(env, &root_uri, None, |project| {
+        if let Some(Some(server)) = project.servers.remove(&file_type) {
             let shutdown_req = Message::from_str_typed::<Request>(&request).unwrap_or_else(|e| {
                 Logger::info(format!("Failed to parse shutdown request: {}. Using default", e));
                 Request::new_shutdown()
             });
             std::thread::spawn(move || shutdown_orchestrator(server, shutdown_req));
             Ok(Some(true))
-        }
-        None => {
-            env_message_and_bail!(env, "No {} server found in project '{}'", file_type, root_uri);
+        } else {
+            env_message_and_bail!(env, "No {} server found in project '{}'", file_type, root_uri)
         }
     })
 }
@@ -743,10 +742,10 @@ fn shutdown(env: &Env, root_uri: String, file_type: String, request: String) -> 
 #[defun]
 fn server(env: &Env, root_uri: String, file_type: String) -> Result<Option<String>> {
     with_project(env, &root_uri, None, |project| match project.servers.get(&file_type) {
-        Some(server) => {
+        Some(Some(server)) => {
             Ok(Some(serde_json::to_string(&server.server_info).context("failed to serialize server info")?))
         }
-        None => {
+        _ => {
             env_message_and_bail!(env, "No {} server found in project '{}'", file_type, root_uri)
         }
     })
