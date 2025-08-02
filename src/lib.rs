@@ -409,24 +409,24 @@ impl LspServer {
         }
     }
 
-    /// Shutdown LSP child process and associated threads
+    /// Tears down and cleanup LSP child process and associated threads
     ///
     /// 1. Signal the dispatcher thread and transport threads to stop
     /// 2. Join both dispatcher and transport threads
-    /// 3. Attempt a graceful shutdown of the child LSP process, if provided graceful timeout is non-zero
-    /// 4. If the process does not exit within the provided timeout, or error occured, or no graceful timeout provided
-    ///    proceed to the forced shutdown, e.g. kill the process and try to wait for its status for KILL_WAIT_TIMEOUT
-    ///    to avoid leaving a zombie process.
+    /// 3. Attempt to wait for the child LSP process, if provided graceful timeout is non-zero
+    /// 4. If the child process does not exit within the provided timeout, or error occured, or
+    ///    no graceful timeout provided kill the child the process
+    /// 5. Wait (wth a timeout) for child process status to avoid leaving a zombie process.
     ///
     /// # Arguments
-    /// * `graceful_timeout` - The maximum duration to wait for graceful shutdown before escalating to forced termination.
-    ///   Use `Duration::ZERO` to skip graceful shutdown and immediately force kill.
+    /// * `graceful_timeout` - The maximum duration to wait for child to exit before sending kill signal.
+    ///   Use `Duration::ZERO` to skip graceful wait and immediately kill.
     ///
     /// # Returns
     /// * `Ok(Some(status))` if the process exited (gracefully or forcibly) and an exit status is available.
     /// * `Ok(None)` if the process did not exit within the allowed time.
     /// * `Err(e)` if an error occurred during shutdown.
-    pub fn shutdown(&mut self, graceful_timeout: Duration) -> Result<Option<ExitStatus>> {
+    pub fn teardown(&mut self, graceful_timeout: Duration) -> Result<Option<ExitStatus>> {
         let name_id = self.name_id();
         Logger::debug(format!("begin shutdown sequence for {}", name_id));
 
@@ -635,7 +635,7 @@ fn connect(
     let req = Message::from_str_typed::<Request>(&initialize_req_str).context("initialize")?;
     initialize(env, &mut server, req, Duration::from_secs(timeout.max(0) as u64))
         .inspect_err(|_| {
-            let _ = server.shutdown(Duration::ZERO); // forcibly kill server and join threads
+            let _ = server.teardown(Duration::ZERO); // forcibly kill server and join threads
         })
         .with_context(|| format!("Failed to initialize LSP server for {}", prj_name_type))?;
 
@@ -712,7 +712,7 @@ pub fn shutdown_server(mut server: LspServer, req: Request) -> Result<Option<Exi
             Some(resp) if resp.id == req_id => {
                 let exit = Notification::new("exit", json!({}))?;
                 let _ = server.write(exit);
-                return server.shutdown(shutdown_timeout); // Graceful + forced, if needed
+                return server.teardown(shutdown_timeout); // Graceful + forced, if needed
             }
             Some(_) => continue, // Ignore responses with non-matched id
             None => {
@@ -722,7 +722,7 @@ pub fn shutdown_server(mut server: LspServer, req: Request) -> Result<Option<Exi
 
         if start_time.elapsed() > shutdown_timeout {
             Logger::info(format!("Graceful termination for {} timed out. Forcing shutdown", name_id));
-            return server.shutdown(Duration::ZERO); // Forced
+            return server.teardown(Duration::ZERO); // Forced
         }
     }
 }
