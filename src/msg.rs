@@ -371,6 +371,9 @@ impl Request {
     ) -> Result<Request, serde_json::Error> {
         Ok(Request { id: id.into(), method: m.into(), params: serde_json::to_value(params)?, ..Default::default() })
     }
+    pub fn new_shutdown() -> Request {
+        Request { id: "shutdown".into(), method: "shutdown".to_string(), ..Default::default() }
+    }
 }
 
 impl Notification {

@@ -713,8 +713,11 @@ pub fn shutdown_server(mut server: LspServer, req: Request) -> Result<Option<Exi
 fn shutdown(env: &Env, root_uri: String, file_type: String, request: String) -> Result<Option<bool>> {
     with_project(env, &root_uri, None, |project| match project.servers.remove(&file_type) {
         Some(server) => {
-            let msg = Message::from_str_typed::<Request>(&request).context("shutdown")?;
-            std::thread::spawn(move || shutdown_server(server, msg));
+            let shutdown_req = Message::from_str_typed::<Request>(&request).unwrap_or_else(|e| {
+                Logger::info(format!("Failed to parse shutdown request: {}. Using default", e));
+                Request::new_shutdown()
+            });
+            std::thread::spawn(move || shutdown_server(server, shutdown_req));
             Ok(Some(true))
         }
         None => {
