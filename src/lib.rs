@@ -216,29 +216,18 @@ impl LspServer {
     fn start_dispatcher(
         receiver: Receiver<Message>, exit: Arc<AtomicBool>, server_data: Arc<Mutex<LspServerData>>,
     ) -> thread::JoinHandle<()> {
-        let handle = thread::spawn(move || loop {
-            if exit.load(Ordering::Relaxed) {
-                break;
-            }
-
-            let mut message: Option<Message> = None;
-            match receiver.recv_timeout(Duration::from_millis(1)) {
-                Ok(msg) => message = Some(msg),
-                Err(_) => {}
-            }
-
-            if let Some(m) = message {
-                match m {
+        let handle = thread::spawn(move || {
+            for msg in receiver {
+                if exit.load(Ordering::Relaxed) {
+                    Logger::info(&format!("Dispatcher - requested to exit"));
+                    break;
+                }
+                match msg {
                     Message::Request(r) => {
                         if r.method == "workspace/configuration" {
                             let mut server_data = server_data.lock().unwrap();
                             server_data.requests.push_back(r);
                         }
-                        // save request into the queue FIXME
-                        // {
-                        //     let mut requests = requests2.lock().unwrap();
-                        //     requests.push_back(r);
-                        // }
                     }
                     Message::Response(mut r) => {
                         Logger::trace(format!("Response {}", r));
@@ -273,8 +262,13 @@ impl LspServer {
                         }
                     }
                     Message::Notification(r) => {
-                        // cache diagnostics so they won't pour into Emacs
-                        if r.method == "textDocument/publishDiagnostics" {
+                        if r.method == "exit" {
+                            // Self exit notification from IO writer.
+                            // Not really needed since we'll get an error once writer drop it's channel end
+                            Logger::info(format!("Dispatcher - exit notification"));
+                            break;
+                        } else if r.method == "textDocument/publishDiagnostics" {
+                            // cache diagnostics so they won't pour into Emacs
                             match serde_json::from_value::<PublishDiagnosticsParams>(r.params) {
                                 Ok(mut params) => {
                                     let uri_string: String = params.uri.to_string();
@@ -305,11 +299,9 @@ impl LspServer {
                         }
                     }
                 }
-            } else {
-                thread::sleep(DISPATCHER_SLEEP);
             }
+            Logger::info("Dispatcher finished");
         });
-
         handle
     }
 
@@ -384,15 +376,6 @@ impl LspServer {
         }
     }
 
-    pub fn stop_dispatcher(&mut self) {
-        self.exit.store(true, Ordering::Relaxed);
-    }
-
-    pub fn exit_transport(&self) {
-        // FIXME: self.sender.close(); // signal by closing channel?
-        self.exit.store(true, Ordering::Relaxed);
-    }
-
     pub fn kill_child(&mut self) -> Result<Option<ExitStatus>> {
         if let Some(mut child) = self.child.take() {
             return kill_child_and_wait_with_timeout(&mut child, KILL_WAIT_TIMEOUT, &self.name_id);
@@ -435,9 +418,7 @@ impl LspServer {
     pub fn teardown(&mut self, graceful_timeout: Duration) -> Result<Option<ExitStatus>> {
         self.status = SERVER_STATUS_EXITING;
         Logger::debug(format!("begin teardown for {}", self.name_id));
-
-        self.stop_dispatcher();
-        self.exit_transport();
+        self.exit.store(true, Ordering::Relaxed);
 
         let mut status = Ok(None);
         if let Some(mut child) = self.child.take() {
