@@ -55,10 +55,7 @@ pub(crate) fn stdio_transport(
 
             let recv_value = r_to_lsp.recv_timeout(std::time::Duration::from_millis(1));
             match recv_value {
-                Ok(msg) => {
-                    Logger::debug(&format!("stdio write {}", msg));
-                    msg.write(&mut stdin)
-                }
+                Ok(msg) => msg.write(&mut stdin),
                 Err(t) => Ok(()),
             };
         }

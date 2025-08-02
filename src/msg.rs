@@ -289,6 +289,7 @@ impl Message {
     }
 
     pub fn write(self, w: &mut impl Write) -> io::Result<()> {
+        Logger::trace(&format!("[LSP<] {}", self));
         self._write(w) // Error if unrecoverable
     }
 
