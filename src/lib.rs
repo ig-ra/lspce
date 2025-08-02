@@ -489,6 +489,7 @@ fn projects() -> &'static Arc<Mutex<HashMap<String, Project>>> {
 }
 
 // Emacs won't load the module without this.
+#[cfg(not(test))]
 emacs::plugin_is_GPL_compatible!();
 
 trait EnvExt {
@@ -502,6 +503,7 @@ impl EnvExt for Env {
 }
 
 // Register the initialization hook that Emacs will call when it loads the module.
+#[cfg(not(test))]
 #[emacs::module(name("lspce-module"))]
 fn init(env: &Env) -> Result<Value<'_>> {
     env.lspce_message("Done loading")
