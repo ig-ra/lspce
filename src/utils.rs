@@ -1,30 +1,35 @@
-use std::process::{Child, ExitStatus};
-use std::time::Duration;
 use crate::logger::Logger;
 use anyhow::Result;
+use std::process::{Child, ExitStatus};
+use std::time::Duration;
+use wait_timeout::ChildExt;
 
 /// Waits for a child process to exit with a timeout.
-/// Returns Ok(Some(status)) if the process exited, Ok(None) if it did not exit in time, or Err(e) on error.
-pub fn wait_child_with_timeout(
-    child: &mut Child,
-    timeout: Duration,
-    name_id: &str,
-    exit_type: &str,
-) -> Result<Option<ExitStatus>> {
-    use wait_timeout::ChildExt;
-    let msg = format!("{}: child process for {}", exit_type, name_id);
+/// Returns Ok(Some(status)) if the process exited, Ok(None) if it did not exit in time, or Err(e).
+pub fn wait_child_with_timeout(child: &mut Child, timeout: Duration, id: &str) -> Result<Option<ExitStatus>> {
     match child.wait_timeout(timeout) {
         Ok(Some(status)) => {
-            Logger::info(format!("{} exited with status {}", msg, status));
+            Logger::info(format!("wait for <{}>: exit status {}", id, status));
             Ok(Some(status))
         }
         Ok(None) => {
-            Logger::info(format!("{} did not exit after timeout {:?}", msg, timeout));
+            Logger::info(format!("wait for <{}>: did not exit after timeout", id));
             Ok(None)
         }
         Err(e) => {
-            Logger::error(format!("{} wait timeout error: {}", msg, e));
+            Logger::error(format!("wait for <{}>: error: {}", id, e));
             Err(e.into())
         }
     }
+}
+
+/// Kills a child process and waits for it to exit with a timeout.
+/// Returns Ok(Some(status)) if the process exited, Ok(None) if it did not exit in time, or Err(e).
+pub fn kill_child_and_wait_with_timeout(child: &mut Child, timeout: Duration, id: &str) -> Result<Option<ExitStatus>> {
+    Logger::info(format!("forcefully terminating <{}>", id));
+    if let Err(e) = child.kill() {
+        Logger::error(format!("failed to kill <{}>: {}", id, e));
+        return Err(e.into());
+    }
+    wait_child_with_timeout(child, timeout, id)
 }

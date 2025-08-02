@@ -33,7 +33,7 @@ use std::sync::atomic::{AtomicBool, AtomicI32, AtomicU8, Ordering};
 use std::time::{Duration, Instant};
 use stdio::IoThreads;
 
-use crate::utils::wait_child_with_timeout;
+use crate::utils::*;
 use std::{
     collections::{HashMap, VecDeque},
     fmt::Debug,
@@ -362,16 +362,9 @@ impl LspServer {
         self.exit.store(true, Ordering::Relaxed);
     }
 
-    /// Kill the child process (if any) and wait for it to exit, avoiding zombies.
-    /// Returns Ok(Some(status)) if the process exited, Ok(None) if it did not exit in time, or Err(e) on error.
     pub fn kill_child(&mut self) -> Result<Option<ExitStatus>> {
         if let Some(mut child) = self.child.take() {
-            Logger::info(format!("forcefully terminating {}", self.name_id));
-            if let Err(e) = child.kill() {
-                Logger::error(format!("failed to kill child process for {}: {}", self.name_id, e));
-                return Err(e.into());
-            }
-            return wait_child_with_timeout(&mut child, KILL_WAIT_TIMEOUT, &self.name_id, "forced kill_child");
+            return kill_child_and_wait_with_timeout(&mut child, KILL_WAIT_TIMEOUT, &self.name_id);
         }
         Ok(None)
     }
@@ -420,7 +413,7 @@ impl LspServer {
             // Try graceful shutdown first
             if graceful_timeout > Duration::ZERO {
                 Logger::debug(format!("attempting graceful shutdown for {}", self.name_id));
-                status = wait_child_with_timeout(&mut child, graceful_timeout, &self.name_id, "graceful shutdown");
+                status = wait_child_with_timeout(&mut child, graceful_timeout, &self.name_id);
             }
 
             // Either graceful shutdown did not succeed or no graceful timeout provided
