@@ -6,6 +6,7 @@ pub mod logger;
 mod msg;
 mod socket;
 mod stdio;
+mod utils;
 
 #[cfg(test)]
 mod tests;
@@ -32,6 +33,7 @@ use std::sync::atomic::{AtomicBool, AtomicI32, AtomicU8, Ordering};
 use std::time::{Duration, Instant};
 use stdio::IoThreads;
 
+use crate::utils::wait_child_with_timeout;
 use std::{
     collections::{HashMap, VecDeque},
     fmt::Debug,
@@ -367,7 +369,7 @@ impl LspServer {
                 Logger::error(format!("failed to kill child process for {}: {}", self.name_id(), e));
                 return Err(e.into());
             }
-            return Self::wait_child_with_timeout(&mut child, KILL_WAIT_TIMEOUT, &self.name_id(), "forced kill_child");
+            return wait_child_with_timeout(&mut child, KILL_WAIT_TIMEOUT, &self.name_id(), "forced kill_child");
         }
         Ok(None)
     }
@@ -383,28 +385,6 @@ impl LspServer {
         if let Some(handle) = self.dispatcher.take() {
             if let Err(e) = handle.join() {
                 Logger::error(format!("error joining dispatcher thread for {}: {:?}", self.name_id(), e));
-            }
-        }
-    }
-
-    // Helper for waiting on a child with timeout
-    fn wait_child_with_timeout(
-        child: &mut std::process::Child, timeout: Duration, name_id: &str, exit_type: &str,
-    ) -> Result<Option<ExitStatus>> {
-        use wait_timeout::ChildExt;
-        let msg = format!("{}: child process for {}", exit_type, name_id);
-        match child.wait_timeout(timeout) {
-            Ok(Some(status)) => {
-                Logger::info(format!("{} exited with status {}", msg, status));
-                Ok(Some(status))
-            }
-            Ok(None) => {
-                Logger::info(format!("{} did not exit after timeout {:?}", msg, timeout));
-                Ok(None)
-            }
-            Err(e) => {
-                Logger::error(format!("{} wait timeout error: {}", msg, e));
-                Err(e.into())
             }
         }
     }
@@ -439,7 +419,7 @@ impl LspServer {
             // Try graceful shutdown first
             if graceful_timeout > Duration::ZERO {
                 Logger::debug(format!("attempting graceful shutdown for {}", name_id));
-                status = Self::wait_child_with_timeout(&mut child, graceful_timeout, &name_id, "graceful shutdown");
+                status = wait_child_with_timeout(&mut child, graceful_timeout, &name_id, "graceful shutdown");
             }
 
             // Either graceful shutdown did not succeed or no graceful timeout provided
