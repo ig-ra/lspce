@@ -74,7 +74,8 @@ impl LspServerInfo {
 const SERVER_STATUS_NEW: u8 = 0;
 const SERVER_STATUS_STARTING: u8 = 1;
 const SERVER_STATUS_RUNNING: u8 = 2;
-const SERVER_STATUS_EXITING: u8 = 3;
+const SERVER_STATUS_SHUTTTING_DOWN: u8 = 3;
+const SERVER_STATUS_EXITING: u8 = 4;
 
 const POLL_INTERVAL: Duration = Duration::from_millis(10);
 const GRACEFUL_SHUTDOWN_TIMEOUT: Duration = Duration::from_secs(3);
@@ -402,31 +403,30 @@ impl LspServer {
     /// * `Ok(None)` if the process did not exit within the allowed time.
     /// * `Err(e)` if an error occurred during shutdown.
     pub fn teardown(&mut self, graceful_timeout: Duration) -> Result<Option<ExitStatus>> {
-        Logger::debug(format!("begin shutdown sequence for {}", self.name_id));
+        self.status = SERVER_STATUS_EXITING;
+        Logger::debug(format!("begin teardown for {}", self.name_id));
 
         self.stop_dispatcher();
         self.exit_transport();
-        Logger::debug(format!("after stopping transport and dispatcher for {}", self.name_id));
 
         let mut status = Ok(None);
         if let Some(mut child) = self.child.take() {
             // Try graceful shutdown first
             if graceful_timeout > Duration::ZERO {
-                Logger::debug(format!("attempting graceful shutdown for {}", self.name_id));
+                Logger::debug(format!("gracefully waiting for {}", self.name_id));
                 status = wait_child_with_timeout(&mut child, graceful_timeout, &self.name_id);
             }
 
             // Either graceful shutdown did not succeed or no graceful timeout provided
             if !matches!(status, Ok(Some(_))) {
-                Logger::debug("attempting forced shutdown");
                 self.child = Some(child); // set back the child so kill_child can be used
                 status = self.kill_child();
             }
         }
 
-        Logger::debug(format!("joining transport and dispatcher threads for {}", self.name_id));
+        Logger::debug(format!("joining threads for {}", self.name_id));
         self.join_threads();
-        Logger::debug(format!("end shutdown sequence for {}", self.name_id));
+        Logger::debug(format!("finished teardown for {}", self.name_id));
 
         status
     }
@@ -660,18 +660,24 @@ pub fn initialize(env: &Env, server: &mut LspServer, req: Request, timeout: Dura
     }
 }
 
-/// Shuts down LSP server:
-/// 1. Sends the shutdown request to the server and waits for a matching response.
-/// 2. Upon receiving the response, sends an 'exit' notification and tries to gracefully shut down the server.
-///    If server fails to gracefully shut itself down within the specified timeout it would be forcibly closed.
-/// 3. If the server does not respond within the specified timeout, escalates to a forced shutdown.
+/// Shuts shown LSP server.
 ///
-/// Note that this function will run in a background thread
+/// Orchestrates the standard shutdown sequence:
+/// 1. Sends the `shutdown` request to the server.
+/// 2. Waits for the corresponding response.
+/// 3. Upon receiving a successful response, sends the `exit` notification.
+/// 4. Finally, calls `LspServer::teardown` to clean up all underlying OS resources.
+///
+/// If the server does not respond to the `shutdown` request within a timeout,
+/// this function will escalate to a forced teardown.
+///
+/// This function is intended to be run in a background thread to avoid blocking the main thread.
 ///
 /// # Arguments
-/// * `server` - The LspServer instance to shut down.
-/// * `req` - The shutdown request to send to the server.
+/// * `server` - The `LspServer` instance to shut down.
+/// * `req` - The `shutdown` request to send to the server.
 pub fn shutdown_server(mut server: LspServer, req: Request) -> Result<Option<ExitStatus>> {
+    server.status = SERVER_STATUS_SHUTTTING_DOWN;
     Logger::info(format!("request to shutdown {}", server.name_id));
 
     let req_id = req.id.clone();
