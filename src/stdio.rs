@@ -73,11 +73,12 @@ pub(crate) fn stdio_transport(
                 Ok(m) => {
                     if let Some(msg) = m {
                         if let Err(e) = s_from_lsp.send(msg) {
-                            Logger::error(&format!("[LSP send] - error {}", e));
+                            Logger::error(&format!("[LSP>] - channel closed {}", e));
+                            return Ok(());
                         }
                     }
-                    // do nothing on OK(None) - no messsage to handle (malformed). Just continue
                 }
+                // do nothing on OK(None) - no messsage to handle (malformed). Just continue
                 Err(e) => {
                     exit_reader.store(true, Ordering::Relaxed); // unrecoverable error, signal exit
                     Logger::error(&format!("[LSP>] - error {}", e));
