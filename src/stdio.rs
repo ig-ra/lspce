@@ -16,14 +16,11 @@ use bytes::BytesMut;
 use crossbeam_channel::{bounded, Receiver, Sender};
 
 use crate::bufext::BufReadEofExt;
-use crate::msg::{Message, RequestId, Response};
+use crate::msg::{Message, Notification, Response};
 use crate::{
     connection::{NOTIFICATION_MAX, REQUEST_MAX},
     logger::Logger,
 };
-
-const LSPCE_ID: &str = "LSPCE";
-const LSPCE_ERR: i32 = -375; // -sum([ord(c) for c in list("LSPCE")])
 
 macro_rules! break_if_should_exit {
     ($exit_flag:expr, $thread_name:expr) => {{
@@ -99,10 +96,14 @@ pub(crate) fn stdio_transport(
         }
         // notify dispatcher in all ways - exit flag, message and dropping channel
         exit_reader.store(true, Ordering::Relaxed);
-        let _ = s_from_lsp.send(Response::new_err(LSPCE_ID, LSPCE_ERR, "").into());
+        let _ = s_from_lsp.send(Notification::new_exit().into());
         res
     });
 
+    // Stderr is a blocking I/O thread that reads from LSP stdio pipe.
+    // It reads lines and logs them as errors.
+    // Lines are limited to MAX_STDERR_LINE_LEN (in read, to avoid DoS).
+    // Blocking read will be released on I/O error (pipe closed) due to LSP crash or shutdown.
     const MAX_STDERR_LINE_LEN: usize = 4096;
     let exit_stderr = Arc::clone(&exit);
     let stderr_thread = thread::spawn(move || -> io::Result<()> {
