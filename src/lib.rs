@@ -126,6 +126,11 @@ pub struct LspServer {
     dispatcher: Option<thread::JoinHandle<()>>,
     server_data: Arc<Mutex<LspServerData>>,
     exit: Arc<AtomicBool>,
+    name_id: String,
+}
+
+fn name_id(name: &str, id: &str) -> String {
+    format!("<{}:[{}]>", name, id)
 }
 
 impl LspServer {
@@ -162,13 +167,14 @@ impl LspServer {
 
         let mut server = LspServer {
             child: Some(child),
+            name_id: name_id(&server_info.name, &server_info.id),
             server_info: server_info,
             status: SERVER_STATUS_STARTING,
             sender,
             transport_threads: Some(transport_threads),
             dispatcher: None,
             server_data: Arc::new(Mutex::new(LspServerData::new())),
-            exit,
+            exit: exit,
         };
 
         server.dispatcher =
@@ -347,10 +353,6 @@ impl LspServer {
         }
     }
 
-    pub fn name_id(&self) -> String {
-        format!("<{}:[{}]>", self.server_info.name, self.server_info.id)
-    }
-
     pub fn stop_dispatcher(&mut self) {
         self.exit.store(true, Ordering::Relaxed);
     }
@@ -364,12 +366,12 @@ impl LspServer {
     /// Returns Ok(Some(status)) if the process exited, Ok(None) if it did not exit in time, or Err(e) on error.
     pub fn kill_child(&mut self) -> Result<Option<ExitStatus>> {
         if let Some(mut child) = self.child.take() {
-            Logger::info(format!("forcefully terminating {}", self.name_id()));
+            Logger::info(format!("forcefully terminating {}", self.name_id));
             if let Err(e) = child.kill() {
-                Logger::error(format!("failed to kill child process for {}: {}", self.name_id(), e));
+                Logger::error(format!("failed to kill child process for {}: {}", self.name_id, e));
                 return Err(e.into());
             }
-            return wait_child_with_timeout(&mut child, KILL_WAIT_TIMEOUT, &self.name_id(), "forced kill_child");
+            return wait_child_with_timeout(&mut child, KILL_WAIT_TIMEOUT, &self.name_id, "forced kill_child");
         }
         Ok(None)
     }
@@ -378,13 +380,13 @@ impl LspServer {
     pub fn join_threads(&mut self) {
         if let Some(threads) = self.transport_threads.take() {
             if let Err(e) = threads.join() {
-                Logger::error(format!("error joining transport threads for {}: {}", self.name_id(), e));
+                Logger::error(format!("error joining transport threads for {}: {}", self.name_id, e));
             }
         }
 
         if let Some(handle) = self.dispatcher.take() {
             if let Err(e) = handle.join() {
-                Logger::error(format!("error joining dispatcher thread for {}: {:?}", self.name_id(), e));
+                Logger::error(format!("error joining dispatcher thread for {}: {:?}", self.name_id, e));
             }
         }
     }
@@ -407,19 +409,18 @@ impl LspServer {
     /// * `Ok(None)` if the process did not exit within the allowed time.
     /// * `Err(e)` if an error occurred during shutdown.
     pub fn teardown(&mut self, graceful_timeout: Duration) -> Result<Option<ExitStatus>> {
-        let name_id = self.name_id();
-        Logger::debug(format!("begin shutdown sequence for {}", name_id));
+        Logger::debug(format!("begin shutdown sequence for {}", self.name_id));
 
         self.stop_dispatcher();
         self.exit_transport();
-        Logger::debug(format!("after stopping transport and dispatcher for {}", name_id));
+        Logger::debug(format!("after stopping transport and dispatcher for {}", self.name_id));
 
         let mut status = Ok(None);
         if let Some(mut child) = self.child.take() {
             // Try graceful shutdown first
             if graceful_timeout > Duration::ZERO {
-                Logger::debug(format!("attempting graceful shutdown for {}", name_id));
-                status = wait_child_with_timeout(&mut child, graceful_timeout, &name_id, "graceful shutdown");
+                Logger::debug(format!("attempting graceful shutdown for {}", self.name_id));
+                status = wait_child_with_timeout(&mut child, graceful_timeout, &self.name_id, "graceful shutdown");
             }
 
             // Either graceful shutdown did not succeed or no graceful timeout provided
@@ -430,9 +431,9 @@ impl LspServer {
             }
         }
 
-        Logger::debug(format!("joining transport and dispatcher threads for {}", name_id));
+        Logger::debug(format!("joining transport and dispatcher threads for {}", self.name_id));
         self.join_threads();
-        Logger::debug(format!("end shutdown sequence for {}", name_id));
+        Logger::debug(format!("end shutdown sequence for {}", self.name_id));
 
         status
     }
@@ -650,6 +651,7 @@ pub fn initialize(env: &Env, server: &mut LspServer, req: Request, timeout: Dura
             server.server_info.capabilities = serde_json::to_string(&ir.capabilities)?;
             if let Some(si) = ir.server_info {
                 server.server_info.name = si.name;
+                server.name_id = name_id(&server.server_info.name, &server.server_info.id);
                 server.server_info.version = si.version.unwrap_or_default();
             }
             server.status = SERVER_STATUS_RUNNING;
@@ -677,11 +679,10 @@ pub fn initialize(env: &Env, server: &mut LspServer, req: Request, timeout: Dura
 /// * `server` - The LspServer instance to shut down.
 /// * `req` - The shutdown request to send to the server.
 pub fn shutdown_server(mut server: LspServer, req: Request) -> Result<Option<ExitStatus>> {
-    let name_id = server.name_id();
-    Logger::info(format!("request to shutdown {}", name_id));
+    Logger::info(format!("request to shutdown {}", server.name_id));
 
     let req_id = req.id.clone();
-    Logger::debug(format!("sent shutdown request for {}: {:?}", name_id, req));
+    Logger::debug(format!("sent shutdown request for {}: {:?}", server.name_id, req));
     let _ = server.write(req);
 
     let start_time = Instant::now();
@@ -701,7 +702,7 @@ pub fn shutdown_server(mut server: LspServer, req: Request) -> Result<Option<Exi
         }
 
         if start_time.elapsed() > shutdown_timeout {
-            Logger::info(format!("Graceful termination for {} timed out. Forcing shutdown", name_id));
+            Logger::info(format!("Graceful termination for {} timed out. Forcing shutdown", server.name_id));
             return server.teardown(Duration::ZERO); // Forced
         }
     }
