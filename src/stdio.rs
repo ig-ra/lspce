@@ -16,7 +16,7 @@ use bytes::BytesMut;
 use crossbeam_channel::{bounded, Receiver, Sender};
 
 use crate::bufext::BufReadEofExt;
-use crate::msg::{ErrorCode, Message, RequestId, Response};
+use crate::msg::{Message, RequestId, Response};
 use crate::{
     connection::{NOTIFICATION_MAX, REQUEST_MAX},
     logger::Logger,
