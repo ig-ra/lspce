@@ -183,6 +183,35 @@ impl LspServer {
         Ok(server)
     }
 
+    /// Attempts a graceful shutdown using the LSP protocol.
+    ///
+    /// This function sends the `shutdown` request and waits for a corresponding response within
+    /// the specified timeout. If successful, it sends the `exit` notification.
+    ///
+    /// It does NOT tear down resources; it only handles the protocol handshake.
+    ///
+    /// # Returns
+    /// * `true` if the protocol handshake completed successfully within the timeout.
+    /// * `false` if the handshake failed or timed out.
+    pub fn shutdown(&mut self, req: Request, timeout: Duration) -> bool {
+        self.status = SERVER_STATUS_SHUTTTING_DOWN;
+        Logger::info(format!("Starting shutdown protocol for {}.", self.name_id));
+        let req_id = req.id.clone();
+
+        if self.write(req).is_ok() {
+            let start_time = Instant::now();
+            while start_time.elapsed() <= timeout {
+                if matches!(self.read_response(), Some(ref resp) if resp.id == req_id) {
+                    let _ = self.write(Notification::new_exit());
+                    return true; // graceful shutdown prococol completed sucessfully
+                }
+                thread::sleep(POLL_INTERVAL);
+            }
+        }
+        Logger::info(format!("Shutdown protocol failed for <{}>", self.name_id));
+        false // Timed out waiting for response
+    }
+
     fn start_dispatcher(
         receiver: Receiver<Message>, exit: Arc<AtomicBool>, server_data: Arc<Mutex<LspServerData>>,
     ) -> thread::JoinHandle<()> {
@@ -432,6 +461,16 @@ impl LspServer {
     }
 }
 
+impl Drop for LspServer {
+    fn drop(&mut self) {
+        // We could check either handle or status to ensure that teardown wasn't started
+        if self.child.is_some() {
+            Logger::info(format!("Dropping <{}> and forcing teardown.", self.name_id));
+            let _ = self.teardown(Duration::ZERO);
+        }
+    }
+}
+
 struct Project {
     pub root_uri: String,                    //
     pub servers: HashMap<String, LspServer>, // map each language_id to a lsp server
@@ -660,51 +699,25 @@ pub fn initialize(env: &Env, server: &mut LspServer, req: Request, timeout: Dura
     }
 }
 
-/// Shuts shown LSP server.
+/// Orchestrates the server shutdown sequence. Intended to be run in a background thread.
 ///
-/// Orchestrates the standard shutdown sequence:
-/// 1. Sends the `shutdown` request to the server.
-/// 2. Waits for the corresponding response.
-/// 3. Upon receiving a successful response, sends the `exit` notification.
-/// 4. Finally, calls `LspServer::teardown` to clean up all underlying OS resources.
-///
-/// If the server does not respond to the `shutdown` request within a timeout,
-/// this function will escalate to a forced teardown.
-///
-/// This function is intended to be run in a background thread to avoid blocking the main thread.
+/// This function first attempts a polite, protocol-level shutdown by calling
+/// `LspServer::shutdown`. Regardless of the outcome, it then relies on the
+/// `LspServer`'s `Drop` implementation to automatically trigger the final
+/// resource teardown, ensuring cleanup always occurs.
 ///
 /// # Arguments
 /// * `server` - The `LspServer` instance to shut down.
 /// * `req` - The `shutdown` request to send to the server.
-pub fn shutdown_server(mut server: LspServer, req: Request) -> Result<Option<ExitStatus>> {
-    server.status = SERVER_STATUS_SHUTTTING_DOWN;
-    Logger::info(format!("request to shutdown {}", server.name_id));
+///
+fn shutdown_orchestrator(mut server: LspServer, req: Request) {
+    // --- Phase 1: Polite Shutdown via LSP Protocol ---
+    let _ = server.shutdown(req, GRACEFUL_SHUTDOWN_TIMEOUT);
 
-    let req_id = req.id.clone();
-    Logger::debug(format!("sent shutdown request for {}: {:?}", server.name_id, req));
-    let _ = server.write(req);
-
-    let start_time = Instant::now();
-    let shutdown_timeout = GRACEFUL_SHUTDOWN_TIMEOUT;
-
-    loop {
-        match server.read_response() {
-            Some(resp) if resp.id == req_id => {
-                let exit = Notification::new("exit", json!({}))?;
-                let _ = server.write(exit);
-                return server.teardown(shutdown_timeout); // Graceful + forced, if needed
-            }
-            Some(_) => continue, // Ignore responses with non-matched id
-            None => {
-                thread::sleep(POLL_INTERVAL);
-            }
-        }
-
-        if start_time.elapsed() > shutdown_timeout {
-            Logger::info(format!("Graceful termination for {} timed out. Forcing shutdown", server.name_id));
-            return server.teardown(Duration::ZERO); // Forced
-        }
-    }
+    // --- Phase 2: Automatic Teardown via Drop  ---
+    // Assumed that this is the last copy of server variable.
+    // When this function returns, the `server` variable goes out of scope,
+    // `LspServer::drop` will be automatically called, which in turn calls `teardown`.
 }
 
 // Spans a thread to shut down the server to avoid blocking emacs while performing LSP shutdown sequence.
@@ -717,7 +730,7 @@ fn shutdown(env: &Env, root_uri: String, file_type: String, request: String) -> 
                 Logger::info(format!("Failed to parse shutdown request: {}. Using default", e));
                 Request::new_shutdown()
             });
-            std::thread::spawn(move || shutdown_server(server, shutdown_req));
+            std::thread::spawn(move || shutdown_orchestrator(server, shutdown_req));
             Ok(Some(true))
         }
         None => {
