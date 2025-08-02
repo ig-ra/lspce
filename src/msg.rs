@@ -380,6 +380,9 @@ impl Notification {
     pub fn new(method: impl Into<String>, params: impl Serialize) -> Result<Notification, serde_json::Error> {
         Ok(Notification { method: method.into(), params: serde_json::to_value(params)?, ..Default::default() })
     }
+    pub fn new_exit() -> Notification {
+        Notification { method: "exit".to_string(), ..Default::default() }
+    }
 }
 
 const MAX_LSP_HEADER_LEN: usize = 1024;
