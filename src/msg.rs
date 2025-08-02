@@ -289,8 +289,9 @@ impl Message {
     }
 
     pub fn write(self, w: &mut impl Write) -> io::Result<()> {
-        self._write(w)
+        self._write(w) // Error if unrecoverable
     }
+
     fn _write(self, w: &mut dyn Write) -> io::Result<()> {
         #[derive(Serialize)]
         struct JsonRpc {
@@ -298,7 +299,15 @@ impl Message {
             #[serde(flatten)]
             msg: Message,
         }
-        let text = serde_json::to_string(&JsonRpc { jsonrpc: "2.0", msg: self })?;
+        let text = match serde_json::to_string(&JsonRpc { jsonrpc: "2.0", msg: self }) {
+            Ok(text) => text,
+            Err(e) => {
+                // this shouldn't happen. Message is always serializable, unless we are doing something
+                // very wrong - Unicode? recursion? large nested structures?
+                Logger::error(&format!("[LSP<] - error serializing message: {}", e));
+                return Ok(()); // report and just skip. we cannot write it anyway
+            }
+        };
         write_msg_text(w, &text)
     }
 }
@@ -379,9 +388,7 @@ fn read_msg_text(mut inp: &mut dyn BufRead) -> io::Result<String> {
 
 fn write_msg_text(out: &mut dyn Write, msg: &str) -> io::Result<()> {
     out.write_all(format!("Content-Length: {}\r\n\r\n{}", msg.len(), &msg).as_bytes())?;
-    out.flush()?;
-
-    Ok(())
+    out.flush()
 }
 
 #[cfg(test)]
