@@ -22,6 +22,9 @@ use crate::{
     logger::Logger,
 };
 
+const LSPCE_ID: &str = "LSPCE";
+const LSPCE_ERR: i32 = -375; // -sum([ord(c) for c in list("LSPCE")])
+
 /// Checks if thread should exit based on exit flag
 fn should_exit(exit_flag: &Arc<AtomicBool>, thread_name: &str) -> bool {
     let exit = exit_flag.load(Ordering::Relaxed);
@@ -61,34 +64,47 @@ pub(crate) fn stdio_transport(
         }
     });
 
+    // Reader is a blocking I/O thread that reads from LSP stdio pipe.
+    //
+    // It reads Message and sends to the dispatcher via channel.
+    // On error try to notify dispatcher both via message, via exit flag, and by dropping channel.
+    // Blocking read will be released on I/O error (pipe closed) due to LSP crash or shutdown.
     let exit_reader = Arc::clone(&exit);
     let (s_from_lsp, r_from_lsp) = bounded::<Message>(10);
     let reader_thread = thread::spawn(move || {
         let mut reader = std::io::BufReader::new(child_stdout);
+        let res = Ok(());
 
         loop {
-            bail_if_should_exit!(&exit_reader, ">");
+            if exit_reader.load(Ordering::Relaxed) {
+                Logger::info(&format!("[LSP>] - requested to exit"));
+                break;
+            }
 
             match Message::read(&mut reader) {
                 Ok(m) => {
                     if let Some(msg) = m {
                         if let Err(e) = s_from_lsp.send(msg) {
                             Logger::error(&format!("[LSP>] - channel closed {}", e));
-                            return Ok(());
+                            break;
                         }
                     }
                 }
+                //
                 // do nothing on OK(None) - no messsage to handle (malformed). Just continue
+                //
+                // err is unrecoverable I/O error (pipe closed)
                 Err(e) => {
-                    exit_reader.store(true, Ordering::Relaxed); // unrecoverable error, signal exit
                     Logger::error(&format!("[LSP>] - error {}", e));
-
-                    let msg = Response::new_err(RequestId::from(1), -32603, format!("{}", e));
-                    let _ = s_from_lsp.send(Message::Response(msg));
-                    return Err(e);
+                    res = Err(e);
+                    break;
                 }
             }
         }
+        // notify dispatcher in all ways - exit flag, message and dropping channel
+        exit_reader.store(true, Ordering::Relaxed);
+        let _ = s_from_lsp.send(Response::new_err(LSPCE_ID, LSPCE_ERR, "").into());
+        res;
     });
 
     const MAX_STDERR_LINE_LEN: usize = 4096;
