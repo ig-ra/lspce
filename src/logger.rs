@@ -19,10 +19,6 @@ pub static LOG_LEVEL: AtomicU8 = AtomicU8::new(LOG_INFO);
 
 pub static LOG_FILE_NAME: LazyLock<Mutex<String>> = LazyLock::new(|| Mutex::new(String::new()));
 
-pub fn log_enabled(level: u8) -> bool {
-    LOG_LEVEL.load(Ordering::Relaxed) >= level
-}
-
 pub fn enable_logging() {
     LOG_LEVEL.store(LOG_DEBUG, Ordering::Relaxed);
 }
@@ -65,8 +61,7 @@ impl Logger {
     }
 
     fn log_if_enabled(level: u8, buf: impl AsRef<str>) {
-        let cur_level = LOG_LEVEL.load(Ordering::Relaxed);
-        if cur_level >= level {
+        if LOG_LEVEL.load(Ordering::Relaxed) >= level {
             Logger::log(buf);
         }
     }
