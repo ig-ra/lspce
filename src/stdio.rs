@@ -26,8 +26,8 @@ macro_rules! break_if_should_exit {
     ($exit_flag:expr, $thread_name:expr) => {{
         if $exit_flag.load(Ordering::Relaxed) {
             Logger::info(&format!("[LSP{}] - requested to exit", $thread_name));
+            break;
         }
-        break;
     }};
 }
 
