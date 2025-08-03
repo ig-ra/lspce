@@ -514,11 +514,22 @@ impl EnvExt for Env {
     }
 }
 
+use std::sync::Once;
+static INIT: Once = Once::new();
+
+// need to be called both in profuction as part of initialization hook and in lib + integration tests
+pub fn lspce_init() {
+    INIT.call_once(|| {
+        logger::set_log_prefix("[MAIN] - ");
+        thread::spawn(reap_dead_servers);
+    });
+}
+
 // Register the initialization hook that Emacs will call when it loads the module.
 #[cfg(not(test))]
 #[emacs::module(name("lspce-module"))]
 fn init(env: &Env) -> Result<Value<'_>> {
-    thread::spawn(reap_dead_servers);
+    lspce_init();
     env.lspce_message("Done loading")
 }
 
