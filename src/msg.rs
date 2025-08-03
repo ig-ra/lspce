@@ -260,12 +260,12 @@ impl Message {
     pub fn read(r: &mut impl BufRead) -> io::Result<Option<Message>> {
         match Message::_read(r) {
             Ok(Some(msg)) => {
-                Logger::trace(&format!("[LSP>] {}", msg));
+                Logger::trace(&msg);
                 Ok(Some(msg))
             }
             Ok(None) => {
                 // recoverable error (parsing/reading/de-serialization)
-                Logger::error("[LSP>] - skipping malformed message/headers");
+                Logger::error("skipping malformed message/headers");
                 Ok(None) // recoverable error
             }
             other => other,
@@ -289,7 +289,7 @@ impl Message {
     }
 
     pub fn write(self, w: &mut impl Write) -> io::Result<()> {
-        Logger::trace(&format!("[LSP<] {}", self));
+        Logger::trace(&self);
         self._write(w) // Error if unrecoverable
     }
 
@@ -305,7 +305,7 @@ impl Message {
             Err(e) => {
                 // this shouldn't happen. Message is always serializable, unless we are doing something
                 // very wrong - Unicode? recursion? large nested structures?
-                Logger::error(&format!("[LSP<] - error serializing message: {}", e));
+                Logger::error(&format!("error serializing message: {}", e));
                 return Ok(()); // report and just skip. we cannot write it anyway
             }
         };

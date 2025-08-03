@@ -16,6 +16,7 @@ use bytes::BytesMut;
 use crossbeam_channel::{bounded, Receiver, Sender};
 
 use crate::bufext::BufReadEofExt;
+use crate::logger;
 use crate::msg::{Message, Notification, Response};
 use crate::{
     connection::{NOTIFICATION_MAX, REQUEST_MAX},
@@ -23,9 +24,9 @@ use crate::{
 };
 
 macro_rules! break_if_should_exit {
-    ($exit_flag:expr, $thread_name:expr) => {{
+    ($exit_flag:expr) => {{
         if $exit_flag.load(Ordering::Relaxed) {
-            Logger::info(&format!("[LSP{}] - requested to exit", $thread_name));
+            Logger::info(&format!("requested to exit"));
             break;
         }
     }};
@@ -39,24 +40,27 @@ pub(crate) fn stdio_transport(
     let (s_to_lsp, r_to_lsp) = bounded::<Message>(10);
     let writer_thread = thread::spawn(move || {
         let mut stdin = child_stdin;
+        logger::set_log_prefix("[LSP<] - ");
+
         loop {
-            break_if_should_exit!(&exit_writer, '<');
+            break_if_should_exit!(&exit_writer);
 
             match r_to_lsp.recv() {
                 Ok(msg) => {
                     if let Err(e) = msg.write(&mut stdin) {
-                        Logger::error(&format!("[LSP<] - error {}", e));
+                        Logger::error(&format!("error {}", e));
                         exit_writer.store(true, Ordering::Relaxed);
                         return Err(e);
                     }
                 }
                 Err(e) => {
-                    Logger::info(&format!("[LSP<] - channel closed {}", e));
+                    Logger::info(&format!("channel closed {}", e));
                     exit_writer.store(true, Ordering::Relaxed);
                     break;
                 }
             }
         }
+        Logger::info("finished");
         Ok(())
     });
 
@@ -71,14 +75,16 @@ pub(crate) fn stdio_transport(
         let mut reader = std::io::BufReader::new(child_stdout);
         let mut res = Ok(());
 
+        logger::set_log_prefix("[LSP>] - ");
+
         loop {
-            break_if_should_exit!(&exit_reader, '>');
+            break_if_should_exit!(&exit_reader);
 
             match Message::read(&mut reader) {
                 Ok(m) => {
                     if let Some(msg) = m {
                         if let Err(e) = s_from_lsp.send(msg) {
-                            Logger::error(&format!("[LSP>] - channel closed {}", e));
+                            Logger::error(&format!("channel closed {}", e));
                             break;
                         }
                     }
@@ -88,7 +94,7 @@ pub(crate) fn stdio_transport(
                 //
                 // err is unrecoverable I/O error (pipe closed)
                 Err(e) => {
-                    Logger::error(&format!("[LSP>] - error {}", e));
+                    Logger::error(&format!("error: {}", e));
                     res = Err(e);
                     break;
                 }
@@ -97,6 +103,7 @@ pub(crate) fn stdio_transport(
         // notify dispatcher in all ways - exit flag, message and dropping channel
         exit_reader.store(true, Ordering::Relaxed);
         let _ = s_from_lsp.send(Notification::new_exit().into());
+        Logger::info("finished");
         res
     });
 
@@ -109,25 +116,27 @@ pub(crate) fn stdio_transport(
     let stderr_thread = thread::spawn(move || -> io::Result<()> {
         let mut reader = std::io::BufReader::new(child_stderr);
         let mut buffer = String::new();
+        logger::set_log_prefix("[LSP!] - ");
 
         loop {
-            break_if_should_exit!(&exit_stderr, '!');
+            break_if_should_exit!(&exit_stderr);
 
             buffer.clear();
             match reader.read_line_limited_or_eof(&mut buffer, MAX_STDERR_LINE_LEN) {
                 Ok(_) => {
-                    Logger::error(&format!("[LSP!] {}", &buffer.trim_end()));
+                    Logger::error(buffer.trim_end());
                 }
                 Err(e) if e.kind() == io::ErrorKind::QuotaExceeded => {
-                    Logger::error(&format!("[LSP!] - ...Truncated.. {}", &buffer.trim_end()));
+                    Logger::error(&format!("...Truncated.. {}", buffer.trim_end()));
                 }
                 Err(e) => {
                     // don't signal coordinated shutdown on error here. Leave the decision to stdin/stdout threads
-                    Logger::error(&format!("[LSP!] - error: {}", e));
+                    Logger::error(&format!("error: {}", e));
                     return Err(e); // Exit on unrecoverable errors including pipe close/EOF
                 }
             }
         }
+        Logger::info("finished");
         Ok(())
     });
 
@@ -170,9 +179,9 @@ impl IoThreads {
         Logger::info("IoThreads join");
 
         let errors: Vec<String> = [
-            join_thread(self.reader, "reader"),
-            join_thread(self.writer, "writer"),
-            self.stderr.and_then(|h| join_thread(h, "stderr")),
+            join_thread(self.reader, "LSP>"),
+            join_thread(self.writer, "LSP<"),
+            self.stderr.and_then(|h| join_thread(h, "LSP!")),
         ]
         .into_iter()
         .flatten()

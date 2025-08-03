@@ -217,9 +217,10 @@ impl LspServer {
         receiver: Receiver<Message>, exit: Arc<AtomicBool>, server_data: Arc<Mutex<LspServerData>>,
     ) -> thread::JoinHandle<()> {
         let handle = thread::spawn(move || {
+            logger::set_log_prefix("[DISP] - ");
             for msg in receiver {
                 if exit.load(Ordering::Relaxed) {
-                    Logger::info(&format!("Dispatcher - requested to exit"));
+                    Logger::info(&format!("requested to exit"));
                     break;
                 }
                 match msg {
@@ -230,7 +231,6 @@ impl LspServer {
                         }
                     }
                     Message::Response(mut r) => {
-                        Logger::trace(format!("Response {}", r));
                         let id = r.id.clone();
 
                         let mut server_data = server_data.lock().unwrap();
@@ -265,7 +265,7 @@ impl LspServer {
                         if r.method == "exit" {
                             // Self exit notification from IO writer.
                             // Not really needed since we'll get an error once writer drop it's channel end
-                            Logger::info(format!("Dispatcher - exit notification"));
+                            Logger::info(format!("exit notification"));
                             break;
                         } else if r.method == "textDocument/publishDiagnostics" {
                             // cache diagnostics so they won't pour into Emacs
@@ -300,7 +300,7 @@ impl LspServer {
                     }
                 }
             }
-            Logger::info("Dispatcher finished");
+            Logger::info("finished");
         });
         handle
     }
