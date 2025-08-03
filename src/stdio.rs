@@ -40,6 +40,7 @@ pub(crate) fn stdio_transport(
     let (s_to_lsp, r_to_lsp) = bounded::<Message>(10);
     let writer_thread = thread::spawn(move || {
         let mut stdin = child_stdin;
+        let mut res = Ok(());
         logger::set_log_prefix("[LSP<] - ");
 
         loop {
@@ -48,20 +49,21 @@ pub(crate) fn stdio_transport(
             match r_to_lsp.recv() {
                 Ok(msg) => {
                     if let Err(e) = msg.write(&mut stdin) {
-                        Logger::error(&format!("error {}", e));
                         exit_writer.store(true, Ordering::Relaxed);
-                        return Err(e);
+                        res = Err(e);
+                        break;
                     }
                 }
                 Err(e) => {
-                    Logger::info(&format!("channel closed {}", e));
+                    Logger::info(&format!("channel error: {}", e));
                     exit_writer.store(true, Ordering::Relaxed);
+                    res = Err(io::Error::new(io::ErrorKind::NotConnected, e));
                     break;
                 }
             }
         }
         Logger::info("finished");
-        Ok(())
+        res
     });
 
     // Reader is a blocking I/O thread that reads from LSP stdio pipe.
