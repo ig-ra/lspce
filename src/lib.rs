@@ -196,7 +196,7 @@ impl LspServer {
     /// * `false` if the handshake failed or timed out.
     pub fn shutdown(&mut self, req: Request, timeout: Duration) -> bool {
         self.status = SERVER_STATUS_SHUTTTING_DOWN;
-        Logger::info(format!("Starting shutdown protocol for <{}>", self.name_id));
+        Logger::info(format!("Starting shutdown protocol for {}", self.name_id));
         let req_id = req.id.clone();
 
         if _request_async(self, req).is_ok() {
@@ -204,12 +204,14 @@ impl LspServer {
             while start_time.elapsed() <= timeout {
                 if matches!(self.read_response(), Some(ref resp) if resp.id == req_id) {
                     let _ = self.write(Notification::new_exit());
+                    self.status = SERVER_STATUS_EXITING;
+                    Logger::info(format!("Shutdown protocol finished for {}", self.name_id));
                     return true; // graceful shutdown prococol completed sucessfully
                 }
                 thread::sleep(POLL_INTERVAL);
             }
         }
-        Logger::info(format!("Shutdown protocol failed for <{}>", self.name_id));
+        Logger::info(format!("Shutdown protocol failed for {}", self.name_id));
         false // Timed out waiting for response
     }
 
@@ -416,15 +418,14 @@ impl LspServer {
     /// * `Ok(None)` if the process did not exit within the allowed time.
     /// * `Err(e)` if an error occurred during shutdown.
     pub fn teardown(&mut self, graceful_timeout: Duration) -> Result<Option<ExitStatus>> {
-        self.status = SERVER_STATUS_EXITING;
-        Logger::debug(format!("begin teardown for {}", self.name_id));
+        Logger::trace(format!("teardown {}", self.name_id));
         self.exit.store(true, Ordering::Relaxed);
 
         let mut status = Ok(None);
         if let Some(mut child) = self.child.take() {
             // Try graceful shutdown first
             if graceful_timeout > Duration::ZERO {
-                Logger::debug(format!("gracefully waiting for {}", self.name_id));
+                Logger::debug(format!("waiting for exit of {}", self.name_id));
                 status = wait_child_with_timeout(&mut child, graceful_timeout, &self.name_id);
             }
 
@@ -490,7 +491,7 @@ fn reap_dead_servers() {
                     let dispatcher_finished = server.dispatcher.as_ref().map_or(true, |h| h.is_finished());
 
                     if exit_requested || dispatcher_finished {
-                        Logger::info(format!("Reaper detected dead server: <{}>. Dropping", server.name_id));
+                        Logger::info(format!("Reaper detected dead server: {}. Dropping", server.name_id));
                         // Take ownership, causing server to be dropped, which will trigger teardown logic
                         let _ = server_option.take();
                     }
