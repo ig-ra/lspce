@@ -123,7 +123,7 @@ pub struct LspServer {
     pub child: Option<Child>,
     pub server_info: LspServerInfo,
     pub status: u8,
-    sender: Sender<Message>,
+    sender: Option<Sender<Message>>,
     transport_threads: Option<IoThreads>,
     dispatcher: Option<thread::JoinHandle<()>>,
     server_data: Arc<Mutex<LspServerData>>,
@@ -172,7 +172,7 @@ impl LspServer {
             name_id: name_id(&server_info.name, &server_info.id),
             server_info: server_info,
             status: SERVER_STATUS_STARTING,
-            sender,
+            sender: Some(sender),
             transport_threads: Some(transport_threads),
             dispatcher: None,
             server_data: Arc::new(Mutex::new(LspServerData::new())),
@@ -327,7 +327,11 @@ impl LspServer {
     }
 
     pub fn write<M: Into<Message>>(&self, msg: M) -> Result<()> {
-        self.sender.send(msg.into()).context("failed to write to transport")
+        if let Some(sender) = &self.sender {
+            sender.send(msg.into()).context("failed to send(er)")
+        } else {
+            Err(anyhow!("no send(er) channel"))
+        }
     }
 
     pub fn read_response(&self) -> Option<Response> {
@@ -421,6 +425,8 @@ impl LspServer {
     pub fn teardown(&mut self, graceful_timeout: Duration) -> Result<Option<ExitStatus>> {
         Logger::trace(format!("teardown {}", self.name_id));
         self.exit.store(true, Ordering::Relaxed);
+        // Drop the sender to close the channel and signal transport threads to exit
+        self.sender.take(); // drop channel to cause writer thread to exit
 
         let mut status = Ok(None);
         if let Some(mut child) = self.child.take() {
