@@ -196,10 +196,10 @@ impl LspServer {
     /// * `false` if the handshake failed or timed out.
     pub fn shutdown(&mut self, req: Request, timeout: Duration) -> bool {
         self.status = SERVER_STATUS_SHUTTTING_DOWN;
-        Logger::info(format!("Starting shutdown protocol for {}.", self.name_id));
+        Logger::info(format!("Starting shutdown protocol for <{}>", self.name_id));
         let req_id = req.id.clone();
 
-        if self.write(req).is_ok() {
+        if _request_async(self, req).is_ok() {
             let start_time = Instant::now();
             while start_time.elapsed() <= timeout {
                 if matches!(self.read_response(), Some(ref resp) if resp.id == req_id) {
