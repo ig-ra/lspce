@@ -86,7 +86,7 @@ pub(crate) fn stdio_transport(
                 Ok(m) => {
                     if let Some(msg) = m {
                         if let Err(e) = s_from_lsp.send(msg) {
-                            Logger::error(&format!("channel closed {}", e));
+                            Logger::error(&format!("channel error: {}", e));
                             break;
                         }
                     }
@@ -96,7 +96,7 @@ pub(crate) fn stdio_transport(
                 //
                 // err is unrecoverable I/O error (pipe closed)
                 Err(e) => {
-                    Logger::error(&format!("error: {}", e));
+                    Logger::error(&format!("I/O error: {}", e));
                     res = Err(e);
                     break;
                 }
@@ -104,7 +104,7 @@ pub(crate) fn stdio_transport(
         }
         // notify dispatcher in all ways - exit flag, message and dropping channel
         exit_reader.store(true, Ordering::Relaxed);
-        let _ = s_from_lsp.send(Notification::new_exit().into());
+        let _ = s_from_lsp.send(Notification::new_exit().into()); // just to unblock channel
         Logger::info("finished");
         res
     });
@@ -133,7 +133,7 @@ pub(crate) fn stdio_transport(
                 }
                 Err(e) => {
                     // don't signal coordinated shutdown on error here. Leave the decision to stdin/stdout threads
-                    Logger::error(&format!("error: {}", e));
+                    Logger::error(&format!("I/O error: {}", e));
                     return Err(e); // Exit on unrecoverable errors including pipe close/EOF
                 }
             }
@@ -142,58 +142,58 @@ pub(crate) fn stdio_transport(
         Ok(())
     });
 
-    let threads = make_io_threads(reader_thread, writer_thread, Some(stderr_thread));
+    let threads = IoThreads::new(reader_thread, writer_thread, Some(stderr_thread));
     (s_to_lsp, r_from_lsp, threads)
 }
 
-// Creates an IoThreads
-pub(crate) fn make_io_threads(
-    reader: thread::JoinHandle<io::Result<()>>, writer: thread::JoinHandle<io::Result<()>>,
-    stderr: Option<thread::JoinHandle<io::Result<()>>>,
-) -> IoThreads {
-    IoThreads { reader, writer, stderr }
+#[repr(u8)]
+pub enum ThreadTypes {
+    Writer = 0, // 0 / STDIN. LSPCE -> LSP
+    Reader = 1, // 1 / STDOUT. LSP -> LSPCE
+    Stderr = 2, // 2 / STDERR . LSP -> stderr
 }
+pub const MAX_THREADS: usize = 3;
 
 pub struct IoThreads {
-    reader: thread::JoinHandle<io::Result<()>>,
-    writer: thread::JoinHandle<io::Result<()>>,
-    stderr: Option<thread::JoinHandle<io::Result<()>>>, // only when stdio
+    pub threads: [Option<thread::JoinHandle<io::Result<()>>>; MAX_THREADS],
+    pub results: [ThreadResult; MAX_THREADS],
 }
 
-fn join_thread(handle: thread::JoinHandle<io::Result<()>>, name: &str) -> Option<String> {
-    match handle.join() {
-        Ok(Ok(())) => None,
-        Ok(Err(e)) => {
-            let msg = format!("{name} thread error: {e}");
-            Logger::error(&msg);
-            Some(msg)
-        }
-        Err(e) => {
-            let msg = format!("{name} thread panicked: {:?}", e);
-            Logger::error(&msg);
-            Some(msg)
-        }
-    }
+pub enum ThreadResult {
+    NotJoined,
+    Ok,
+    IoError(std::io::Error),
+    Panic(Box<dyn std::any::Any + Send + 'static>),
 }
 
 impl IoThreads {
-    pub fn join(self) -> io::Result<()> {
-        Logger::info("IoThreads join");
+    pub fn new(
+        reader: thread::JoinHandle<io::Result<()>>, writer: thread::JoinHandle<io::Result<()>>,
+        stderr: Option<thread::JoinHandle<io::Result<()>>>,
+    ) -> Self {
+        use ThreadResult::NotJoined as Dflt;
+        IoThreads { threads: [Some(writer), Some(reader), stderr], results: [Dflt, Dflt, Dflt] }
+    }
 
-        let errors: Vec<String> = [
-            join_thread(self.reader, "LSP>"),
-            join_thread(self.writer, "LSP<"),
-            self.stderr.and_then(|h| join_thread(h, "LSP!")),
-        ]
-        .into_iter()
-        .flatten()
-        .collect();
+    pub fn join(&mut self) -> io::Result<()> {
+        let join_result = |handle: thread::JoinHandle<io::Result<()>>| -> ThreadResult {
+            return match handle.join() {
+                Ok(Ok(())) => ThreadResult::Ok,
+                Ok(Err(e)) => ThreadResult::IoError(e),
+                Err(e) => ThreadResult::Panic(e),
+            };
+        };
 
-        Logger::info("IoThreads join finished.");
-
-        if !errors.is_empty() {
-            return Err(io::Error::new(io::ErrorKind::Other, errors.join("; ")));
+        for i in 0..self.threads.len() {
+            if let Some(handle) = self.threads[i].take() {
+                self.results[i] = join_result(handle);
+            }
         }
+
+        if self.results.iter().any(|r| matches!(r, ThreadResult::Panic(_))) {
+            return Err(io::Error::new(io::ErrorKind::Other, "I/O thread panicked"));
+        }
+
         Ok(())
     }
 }

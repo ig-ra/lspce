@@ -15,7 +15,7 @@ pub trait BufReadEofExt {
 
 fn check_eof(n: usize) -> io::Result<usize> {
     if n == 0 {
-        return Err(io::Error::new(io::ErrorKind::UnexpectedEof, "Stream closed (EOF)"));
+        return Err(io::Error::new(io::ErrorKind::UnexpectedEof, "Unexpected EOF"));
     }
     Ok(n)
 }

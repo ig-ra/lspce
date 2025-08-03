@@ -15,7 +15,7 @@ use crate::{
     connection::{NOTIFICATION_MAX, REQUEST_MAX},
     logger::Logger,
     msg::Message,
-    stdio::{make_io_threads, IoThreads},
+    stdio::IoThreads,
 };
 
 pub(crate) fn socket_transport(
@@ -27,7 +27,7 @@ pub(crate) fn socket_transport(
     let exit_writer = Arc::clone(&exit);
     let (writer_sender, writer) = make_writer(stream.try_clone().unwrap(), exit_writer);
 
-    let io_threads = make_io_threads(reader, writer, None);
+    let io_threads = IoThreads::new(reader, writer, None);
     (writer_sender, reader_receiver, io_threads)
 }
 

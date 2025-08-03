@@ -387,15 +387,16 @@ impl LspServer {
 
     /// joins dispatcher and transport threads.
     pub fn join_threads(&mut self) {
-        if let Some(threads) = self.transport_threads.take() {
+        Logger::debug(format!("Joining threads for {}", self.name_id));
+        if let Some(mut threads) = self.transport_threads.take() {
             if let Err(e) = threads.join() {
-                Logger::error(format!("error joining transport threads for {}: {}", self.name_id, e));
+                Logger::error(format!("error on joining transport for {}: {}", self.name_id, e));
             }
         }
 
         if let Some(handle) = self.dispatcher.take() {
             if let Err(e) = handle.join() {
-                Logger::error(format!("error joining dispatcher thread for {}: {:?}", self.name_id, e));
+                Logger::error(format!("error on joining dispatcher for {}: {:?}", self.name_id, e));
             }
         }
     }
@@ -436,7 +437,6 @@ impl LspServer {
             }
         }
 
-        Logger::debug(format!("joining threads for {}", self.name_id));
         self.join_threads();
         Logger::debug(format!("finished teardown for {}", self.name_id));
 
