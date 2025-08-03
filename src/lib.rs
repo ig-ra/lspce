@@ -448,8 +448,11 @@ impl Drop for LspServer {
     fn drop(&mut self) {
         // We could check either handle or status to ensure that teardown wasn't started
         if self.child.is_some() {
-            Logger::info(format!("Dropping <{}> and forcing teardown.", self.name_id));
-            let _ = self.teardown(Duration::ZERO);
+            Logger::trace(format!("drop {}", self.name_id));
+            let _ = self.teardown(match self.status {
+                SERVER_STATUS_EXITING => GRACEFUL_SHUTDOWN_TIMEOUT,
+                _ => Duration::ZERO,
+            });
         }
     }
 }
