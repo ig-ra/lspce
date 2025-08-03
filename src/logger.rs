@@ -1,4 +1,5 @@
 use std::{
+    cell::RefCell,
     fs::File,
     io::{Error, Write},
     sync::{
@@ -42,40 +43,71 @@ pub fn get_log_level() -> u8 {
     LOG_LEVEL.load(Ordering::Relaxed)
 }
 
+thread_local! {
+    static LOG_PREFIX: RefCell<&'static str> = RefCell::new("");
+    static LOG_TS: RefCell<bool> = RefCell::new(true);
+
+}
+pub fn set_log_prefix(prefix: &'static str) {
+    LOG_PREFIX.with(|p| {
+        *p.borrow_mut() = prefix;
+    });
+}
+
+pub fn disable_ts() {
+    LOG_TS.with(|ts| {
+        *ts.borrow_mut() = false;
+    });
+}
+
+// const/compile-time format string
+const TIME_FORMAT: &[time::format_description::FormatItem] =
+    format_description!("[year]-[month]-[day] [hour]:[minute]:[second].[subsecond digits:3] - ");
+
+fn timestamp() -> String {
+    LOG_TS.with(|flag| {
+        if !*flag.borrow() {
+            String::new()
+        } else {
+            OffsetDateTime::now_local()
+                .unwrap_or_else(|_| OffsetDateTime::now_utc())
+                .format(&TIME_FORMAT)
+                .unwrap_or_else(|_| String::new())
+        }
+    })
+}
 pub struct Logger {}
 
 impl Logger {
-    fn log(buf: impl AsRef<str>) {
+    fn log(buf: impl std::fmt::Display) {
         let mut logger = logger().lock().unwrap();
 
-        // const/compile-time format string
-        const FORMAT: &[time::format_description::FormatItem] =
-            format_description!("[year]-[month]-[day] [hour]:[minute]:[second].[subsecond digits:3] - ");
-
-        let now = OffsetDateTime::now_local().unwrap_or_else(|_| OffsetDateTime::now_utc());
-        let timestamp = now.format(&FORMAT).unwrap_or_else(|_| String::new());
-
-        let message = format!("{}{}\n", timestamp, buf.as_ref());
+        let prefix = LOG_PREFIX.with(|p| *p.borrow());
+        let message = if prefix.is_empty() {
+            format!("{}{}\n", timestamp(), buf)
+        } else {
+            format!("{}{}{}\n", timestamp(), prefix, buf)
+        };
         let _ = logger.write_all(message.as_bytes());
         let _ = logger.flush();
     }
 
-    fn log_if_enabled(level: u8, buf: impl AsRef<str>) {
+    fn log_if_enabled(level: u8, buf: impl std::fmt::Display) {
         if LOG_LEVEL.load(Ordering::Relaxed) >= level {
             Logger::log(buf);
         }
     }
 
-    pub fn error(buf: impl AsRef<str>) {
+    pub fn error(buf: impl std::fmt::Display) {
         Logger::log_if_enabled(LOG_ERROR, buf);
     }
-    pub fn info(buf: impl AsRef<str>) {
+    pub fn info(buf: impl std::fmt::Display) {
         Logger::log_if_enabled(LOG_INFO, buf);
     }
-    pub fn trace(buf: impl AsRef<str>) {
+    pub fn trace(buf: impl std::fmt::Display) {
         Logger::log_if_enabled(LOG_TRACE, buf);
     }
-    pub fn debug(buf: impl AsRef<str>) {
+    pub fn debug(buf: impl std::fmt::Display) {
         Logger::log_if_enabled(LOG_DEBUG, buf);
     }
 }
