@@ -738,23 +738,20 @@ pub fn initialize(env: &Env, server: &mut LspServer, req: Request, timeout: Dura
 
 /// Orchestrates the server shutdown sequence. Intended to be run in a background thread.
 ///
-/// This function first attempts a polite, protocol-level shutdown by calling
-/// `LspServer::shutdown`. Regardless of the outcome, it then relies on the
-/// `LspServer`'s `Drop` implementation to automatically trigger the final
-/// resource teardown, ensuring cleanup always occurs.
+/// This function first attempts a polite, protocol-level `shutdown`.
+/// Then it proceeds to final cleanup and resource `teardown`.
 ///
 /// # Arguments
 /// * `server` - The `LspServer` instance to shut down.
 /// * `req` - The `shutdown` request to send to the server.
 ///
 fn shutdown_orchestrator(mut server: LspServer, req: Request) {
-    // --- Phase 1: Polite Shutdown via LSP Protocol ---
-    let _ = server.shutdown(req, GRACEFUL_SHUTDOWN_TIMEOUT);
-
-    // --- Phase 2: Automatic Teardown via Drop  ---
-    // Assumed that this is the last copy of server variable.
-    // When this function returns, the `server` variable goes out of scope,
-    // `LspServer::drop` will be automatically called, which in turn calls `teardown`.
+    let mut timeout = GRACEFUL_SHUTDOWN_TIMEOUT;
+    if !server.shutdown(req, timeout) {
+        // failed in protocol shutdown, proceed immediately to teardown.
+        timeout = Duration::ZERO;
+    }
+    server.teardown(timeout);
 }
 
 // Spans a thread to shut down the server to avoid blocking emacs while performing LSP shutdown sequence.
