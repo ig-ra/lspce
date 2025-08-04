@@ -50,19 +50,19 @@ pub(crate) fn stdio_transport(
             match r_to_lsp.recv() {
                 Ok(msg) => {
                     if let Err(e) = msg.write(&mut stdin) {
-                        exit_writer.store(true, Ordering::Relaxed);
+                        Logger::error(&format!("I/O error: {}", e));
                         res = Err(e);
                         break;
                     }
                 }
                 Err(e) => {
-                    Logger::info(&format!("channel error: {}", e));
-                    exit_writer.store(true, Ordering::Relaxed);
+                    Logger::error(&format!("channel error: {}", e));
                     res = Err(io::Error::new(io::ErrorKind::NotConnected, e));
                     break;
                 }
             }
         }
+        exit_writer.store(true, Ordering::Relaxed);
         Logger::info("finished");
         res
     });
@@ -88,6 +88,7 @@ pub(crate) fn stdio_transport(
                     if let Some(msg) = m {
                         if let Err(e) = s_from_lsp.send(msg) {
                             Logger::error(&format!("channel error: {}", e));
+                            res = Err(io::Error::new(io::ErrorKind::NotConnected, e));
                             break;
                         }
                     }

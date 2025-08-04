@@ -14,14 +14,12 @@ mod tests;
 use anyhow::{anyhow, bail, Context};
 use crossbeam_channel::{Receiver, Sender};
 use emacs::{defun, Env, IntoLisp, Result, Value};
-use logger::Logger;
-use lspce_macros::defun_safe;
 
 use lsp_types::{
     Diagnostic, DidChangeTextDocumentParams, InitializeResult, InitializedParams, PublishDiagnosticsParams,
     VersionedTextDocumentIdentifier,
 };
-pub use msg::{Message, Notification, Request, RequestId, Response};
+
 use serde::de::DeserializeOwned;
 use serde::{Deserialize, Serialize};
 use serde_json::json;
@@ -31,9 +29,7 @@ use std::result::Result as RustResult;
 
 use std::sync::atomic::{AtomicBool, AtomicI32, AtomicU8, Ordering};
 use std::time::{Duration, Instant};
-use stdio::IoThreads;
 
-use crate::utils::*;
 use std::{
     collections::{HashMap, VecDeque},
     fmt::Debug,
@@ -42,6 +38,13 @@ use std::{
     sync::{Arc, LazyLock, Mutex},
     thread::{self, JoinHandle, Thread},
 };
+
+use logger::Logger;
+use lspce_macros::defun_safe;
+pub use msg::{Message, Notification, Request, RequestId, Response};
+use stdio::IoThreads;
+pub use stdio::ThreadResult;
+use utils::*;
 
 pub static MAX_DIAGNOSTICS_COUNT: AtomicI32 = AtomicI32::new(30);
 
@@ -124,11 +127,17 @@ pub struct LspServer {
     pub server_info: LspServerInfo,
     pub status: u8,
     sender: Option<Sender<Message>>,
-    transport_threads: Option<IoThreads>,
+    transport: Option<IoThreads>,
     dispatcher: Option<thread::JoinHandle<()>>,
     server_data: Arc<Mutex<LspServerData>>,
     exit: Arc<AtomicBool>,
     name_id: String,
+    pub state: ResourceState,
+}
+
+pub struct ResourceState {
+    pub transport: [ThreadResult; 3],
+    pub exit: Option<ExitStatus>,
 }
 
 fn name_id(name: &str, id: &str) -> String {
@@ -167,16 +176,18 @@ impl LspServer {
             server_info.name = name.to_string();
         }
 
+        use ThreadResult::NotJoined;
         let mut server = LspServer {
             child: Some(child),
             name_id: name_id(&server_info.name, &server_info.id),
             server_info: server_info,
             status: SERVER_STATUS_STARTING,
             sender: Some(sender),
-            transport_threads: Some(transport_threads),
+            transport: Some(transport_threads),
             dispatcher: None,
             server_data: Arc::new(Mutex::new(LspServerData::new())),
             exit: exit,
+            state: ResourceState { transport: [NotJoined, NotJoined, NotJoined], exit: None },
         };
 
         server.dispatcher =
@@ -392,10 +403,12 @@ impl LspServer {
     /// joins dispatcher and transport threads.
     pub fn join_threads(&mut self) {
         Logger::debug(format!("Joining threads for {}", self.name_id));
-        if let Some(mut threads) = self.transport_threads.take() {
+        if let Some(mut threads) = self.transport.take() {
             if let Err(e) = threads.join() {
                 Logger::error(format!("error on joining transport for {}: {}", self.name_id, e));
             }
+            Logger::debug(format!("joined transport: {:?}", threads.results));
+            self.state.transport = threads.results;
         }
 
         if let Some(handle) = self.dispatcher.take() {
@@ -745,13 +758,13 @@ pub fn initialize(env: &Env, server: &mut LspServer, req: Request, timeout: Dura
 /// * `server` - The `LspServer` instance to shut down.
 /// * `req` - The `shutdown` request to send to the server.
 ///
-fn shutdown_orchestrator(mut server: LspServer, req: Request) {
-    let mut timeout = GRACEFUL_SHUTDOWN_TIMEOUT;
+pub fn shutdown_server(server: &mut LspServer, req: Request, timeout: Option<Duration>) -> Result<Option<ExitStatus>> {
+    let mut timeout = timeout.unwrap_or(GRACEFUL_SHUTDOWN_TIMEOUT);
     if !server.shutdown(req, timeout) {
         // failed in protocol shutdown, proceed immediately to teardown.
         timeout = Duration::ZERO;
     }
-    server.teardown(timeout);
+    server.teardown(timeout)
 }
 
 // Spans a thread to shut down the server to avoid blocking emacs while performing LSP shutdown sequence.
@@ -759,12 +772,12 @@ fn shutdown_orchestrator(mut server: LspServer, req: Request) {
 #[defun]
 fn shutdown(env: &Env, root_uri: String, file_type: String, request: String) -> Result<Option<bool>> {
     with_project(env, &root_uri, None, |project| {
-        if let Some(Some(server)) = project.servers.remove(&file_type) {
+        if let Some(Some(mut server)) = project.servers.remove(&file_type) {
             let shutdown_req = Message::from_str_typed::<Request>(&request).unwrap_or_else(|e| {
                 Logger::info(format!("Failed to parse shutdown request: {}. Using default", e));
                 Request::new_shutdown()
             });
-            std::thread::spawn(move || shutdown_orchestrator(server, shutdown_req));
+            std::thread::spawn(move || shutdown_server(&mut server, shutdown_req, None));
             Ok(Some(true))
         } else {
             env_message_and_bail!(env, "No {} server found in project '{}'", file_type, root_uri)
