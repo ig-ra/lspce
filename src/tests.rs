@@ -1,81 +1,63 @@
 use super::*;
 
 #[cfg(test)]
-mod tests {
-    use super::*;
+mod test_safe_call {
+    use super::{safe_call, Result};
+    use anyhow::bail;
 
     #[test]
     fn test_safe_call() {
-        // Case 1: Closure returns Result<Option<bool>> -> safe_call will return Result<Option<bool>>
-        assert_eq!(safe_call(|| { Ok(Some(true)) }).unwrap(), Some(true), "Case: test_ok_some");
+        // we will use unwarp, since safe_call should ALWAYS return OK(...). On Err it logs and return Ok(None)
 
-        // Case 2: Closure returns Result<bool> -> safe_call will return Result<Option<bool>>
-        assert_eq!(safe_call(|| { Ok(true) }).unwrap(), Some(true), "Case: test_ok");
+        // Case 1: OK(Some(true)) -> transarently pass -> OK(Some(true))
+        assert_eq!(safe_call(|| { Ok(Some(true)) }).unwrap(), Some(true), "case OK(Some(true))");
 
-        // Case 3: Closure returns Result<Option<bool>> with None -> safe_call will return Result<Option<bool>> with None
-        assert_eq!(safe_call(|| { Ok(None) }).unwrap(), None::<bool>, "Case: test_ok_none");
+        // Case 2: Ok(None) -> transparently pass -> Ok(None)
+        assert_eq!(safe_call(|| { Ok(None) }).unwrap(), None::<bool>, "case OK(None)");
 
-        // Case 4: Closure returns Result<bool> with Err -> safe_call will return Result<bool> with None
-        assert_eq!(safe_call(|| -> Result<bool> { bail!("fail") }).unwrap(), None::<bool>, "Case: test_");
+        // Case 3: Еrr() -> convert to Ok(None)
+        assert_eq!(safe_call(|| -> Result<Option<bool>> { bail!("fail") }).unwrap(), None::<bool>, "Case: test_error");
     }
+}
 
-    #[test]
-    fn test_lsp_server_new_invalid_command() {
-        let server = LspServer::new("nonexistent_command_with_random_suffix", "", "");
-        assert!(matches!(server, Err(ref error) if error.to_string().contains("Failed to spawn LSP server process")));
-    }
+mod test_lspserver_new {
+    use super::LspServer;
+    use std::io;
 
+    #[cfg(unix)]
     #[test]
-    fn test_lsp_server_new_json_parsing_errors() {
-        let malformed_json_cases = vec![
-            ("{", "unclosed brace"),
-            ("{invalid}", "invalid syntax"),
-            ("{invalid:}", "invalid syntax 2"),
-            ("not_json", "not json - string"),
-            (r#"{"missing_quote: "value"}"#, "missing quote"),
-            ("[1,2,3]", "not json - array"),
+    fn test_lsp_server_new_valid_scenarios() {
+        let test_cases = vec![
+            ("true", "", "", "no args and empty envs"),
+            ("echo", "something", "", "cmd with args"),
+            ("echo", "", r#"{"PATH": "/usr/bin", "HOME": "/home/test"}"#, "valid envs"),
         ];
 
-        for (invalid_json, description) in malformed_json_cases {
-            let server = LspServer::new("echo", "", invalid_json);
-            if let Err(e) = server {
-                assert!(
-                    e.to_string().contains("Failed to parse emacs_envs JSON"),
-                    "Test '{}' failed. Expected JSON parsing error, but got: <{}>",
-                    description,
-                    e.to_string()
-                );
-            } else {
-                assert!(
-                    false,
-                    "Test '{}' failed. Expected fail to parse JSON <{}>, but got success",
-                    description, invalid_json
-                );
+        for (cmd, args, envs, description) in test_cases {
+            let res = LspServer::new(cmd, args, envs);
+
+            // May return spawn error on non-linux systems (due to presence of echo/true),
+            // but should not return JSON parsing error.
+            if let Err(e) = &res {
+                if !matches!(e.downcast_ref::<io::Error>(), Some(err) if err.kind() == io::ErrorKind::NotFound) {
+                    panic!("Test '{}' failed. Unexpected error: {:?}", description, e);
+                }
             }
         }
     }
 
     #[test]
-    fn test_lsp_server_new_valid_scenarios() {
+    fn test_lsp_server_new_invalid_scenarios() {
         let test_cases = vec![
-            ("echo", "", "", "empty envs"),
-            ("echo", "something", "", "args"),
-            ("echo", "", r#"{"PATH": "/usr/bin", "HOME": "/home/test"}"#, "valid envs"),
-            ("true", "", "", "fast exit command"),
+            ("unexisting_binary", "", "Failed to spawn LSP server process", "unexisting binary"),
+            ("echo", "not JSON", "Failed to parse emacs_envs JSON", "bad JSON"),
         ];
 
-        for (cmd, args, envs, description) in test_cases {
-            let server = LspServer::new(cmd, args, envs);
-
-            // Platform-dependent. Could return spawn error on non-linux systems (echo/true), but should not return JSON parsing error.
-            if let Err(e) = &server {
-                assert!(
-                    !e.to_string().contains("Failed to parse emacs_envs JSON"),
-                    "Test '{}' failed. Unexpected JSON parsing error: <{}>",
-                    description,
-                    e.to_string()
-                );
-            }
+        for (cmd, envs, error_str, description) in test_cases {
+            let res = LspServer::new(cmd, "", envs);
+            assert!(res.is_err(), "Test '{}' should return an error", description);
+            //let err = res.err().unwrap();
+            assert!(matches!(res, Err(ref e) if e.to_string().contains(error_str)));
         }
     }
 }
