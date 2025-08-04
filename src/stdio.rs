@@ -2,6 +2,7 @@ use std::io::{BufRead, Read};
 use std::time::Instant;
 use std::{
     collections::VecDeque,
+    fmt,
     io::{self, stdin, stdout},
     ops::ControlFlow,
     process::{ChildStderr, ChildStdin, ChildStdout},
@@ -166,13 +167,24 @@ pub enum ThreadResult {
     Panic(Box<dyn std::any::Any + Send + 'static>),
 }
 
+impl fmt::Debug for ThreadResult {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        match self {
+            Self::NotJoined => write!(f, "NotJoined"),
+            Self::Ok => write!(f, "Ok"),
+            Self::IoError(e) => write!(f, "IoError({:?})", e),
+            Self::Panic(_) => write!(f, "Panic(...)"),
+        }
+    }
+}
+
 impl IoThreads {
     pub fn new(
         reader: thread::JoinHandle<io::Result<()>>, writer: thread::JoinHandle<io::Result<()>>,
         stderr: Option<thread::JoinHandle<io::Result<()>>>,
     ) -> Self {
-        use ThreadResult::NotJoined as Dflt;
-        IoThreads { threads: [Some(writer), Some(reader), stderr], results: [Dflt, Dflt, Dflt] }
+        use ThreadResult::NotJoined;
+        IoThreads { threads: [Some(writer), Some(reader), stderr], results: [NotJoined, NotJoined, NotJoined] }
     }
 
     pub fn join(&mut self) -> io::Result<()> {
