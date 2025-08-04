@@ -122,22 +122,27 @@ impl LspServerData {
 /// - Server information (name, version, capabilities)
 /// - Connection state and transport threads
 /// - Server data and exit flag
-pub struct LspServer {
-    pub child: Option<Child>,
-    pub server_info: LspServerInfo,
-    pub status: u8,
-    sender: Option<Sender<Message>>,
+
+pub struct Resources {
+    child: Option<Child>,
     transport: Option<IoThreads>,
     dispatcher: Option<thread::JoinHandle<()>>,
-    server_data: Arc<Mutex<LspServerData>>,
-    exit: Arc<AtomicBool>,
-    name_id: String,
     pub state: ResourceState,
 }
 
 pub struct ResourceState {
-    pub transport: [ThreadResult; 3],
-    pub exit: Option<ExitStatus>,
+    transport: [ThreadResult; 3],
+    exit: Option<ExitStatus>,
+}
+
+pub struct LspServer {
+    resources: Resources,
+    pub server_info: LspServerInfo,
+    pub status: u8,
+    sender: Option<Sender<Message>>,
+    server_data: Arc<Mutex<LspServerData>>,
+    exit: Arc<AtomicBool>,
+    name_id: String,
 }
 
 fn name_id(name: &str, id: &str) -> String {
@@ -168,8 +173,7 @@ impl LspServer {
         let stderr = child.stderr.take().context("Failed to obtain LSP server's stderr")?;
 
         let exit = Arc::new(AtomicBool::new(false));
-        let (sender, receiver, mut transport_threads) =
-            crate::connection::stdio(stdin, stdout, stderr, Arc::clone(&exit));
+        let (sender, receiver, mut transport) = crate::connection::stdio(stdin, stdout, stderr, Arc::clone(&exit));
 
         let mut server_info = LspServerInfo::new(child.id());
         if let Some(name) = std::path::Path::new(cmd).file_name().and_then(|n| n.to_str()) {
@@ -177,21 +181,25 @@ impl LspServer {
         }
 
         use ThreadResult::NotJoined;
-        let mut server = LspServer {
+        let mut resources = Resources {
             child: Some(child),
+            transport: Some(transport),
+            dispatcher: None,
+            state: ResourceState { transport: [NotJoined, NotJoined, NotJoined], exit: None },
+        };
+
+        let mut server = LspServer {
+            resources,
             name_id: name_id(&server_info.name, &server_info.id),
             server_info: server_info,
             status: SERVER_STATUS_STARTING,
             sender: Some(sender),
-            transport: Some(transport_threads),
-            dispatcher: None,
             server_data: Arc::new(Mutex::new(LspServerData::new())),
             exit: exit,
-            state: ResourceState { transport: [NotJoined, NotJoined, NotJoined], exit: None },
         };
-
-        server.dispatcher =
+        server.resources.dispatcher =
             Some(LspServer::start_dispatcher(receiver, Arc::clone(&server.exit), Arc::clone(&server.server_data)));
+
         Ok(server)
     }
 
@@ -394,7 +402,7 @@ impl LspServer {
     }
 
     pub fn kill_child(&mut self) -> Result<Option<ExitStatus>> {
-        if let Some(mut child) = self.child.take() {
+        if let Some(mut child) = self.resources.child.take() {
             return kill_child_and_wait_with_timeout(&mut child, KILL_WAIT_TIMEOUT, &self.name_id);
         }
         Ok(None)
@@ -403,15 +411,15 @@ impl LspServer {
     /// joins dispatcher and transport threads.
     pub fn join_threads(&mut self) {
         Logger::debug(format!("Joining threads for {}", self.name_id));
-        if let Some(mut threads) = self.transport.take() {
+        if let Some(mut threads) = self.resources.transport.take() {
             if let Err(e) = threads.join() {
                 Logger::error(format!("error on joining transport for {}: {}", self.name_id, e));
             }
             Logger::debug(format!("joined transport: {:?}", threads.results));
-            self.state.transport = threads.results;
+            self.resources.state.transport = threads.results;
         }
 
-        if let Some(handle) = self.dispatcher.take() {
+        if let Some(handle) = self.resources.dispatcher.take() {
             if let Err(e) = handle.join() {
                 Logger::error(format!("error on joining dispatcher for {}: {:?}", self.name_id, e));
             }
@@ -442,7 +450,7 @@ impl LspServer {
         self.sender.take(); // drop channel to cause writer thread to exit
 
         let mut status = Ok(None);
-        if let Some(mut child) = self.child.take() {
+        if let Some(mut child) = self.resources.child.take() {
             // Try graceful shutdown first
             if graceful_timeout > Duration::ZERO {
                 Logger::debug(format!("waiting for exit of {}", self.name_id));
@@ -451,7 +459,7 @@ impl LspServer {
 
             // Either graceful shutdown did not succeed or no graceful timeout provided
             if !matches!(status, Ok(Some(_))) {
-                self.child = Some(child); // set back the child so kill_child can be used
+                self.resources.child = Some(child); // set back the child so kill_child can be used
                 status = self.kill_child();
             }
         }
@@ -466,7 +474,7 @@ impl LspServer {
 impl Drop for LspServer {
     fn drop(&mut self) {
         // We could check either handle or status to ensure that teardown wasn't started
-        if self.child.is_some() {
+        if self.resources.child.is_some() {
             Logger::trace(format!("drop {}", self.name_id));
             let _ = self.teardown(match self.status {
                 SERVER_STATUS_EXITING => GRACEFUL_SHUTDOWN_TIMEOUT,
@@ -510,7 +518,7 @@ fn reap_dead_servers() {
             for server_option in project.servers.values_mut() {
                 if let Some(server) = server_option {
                     let exit_requested = server.exit.load(Ordering::Relaxed);
-                    let dispatcher_finished = server.dispatcher.as_ref().map_or(true, |h| h.is_finished());
+                    let dispatcher_finished = server.resources.dispatcher.as_ref().map_or(true, |h| h.is_finished());
 
                     if exit_requested || dispatcher_finished {
                         Logger::info(format!("Reaper detected dead server: {}. Dropping", server.name_id));
