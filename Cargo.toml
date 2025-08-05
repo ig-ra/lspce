@@ -21,9 +21,20 @@ anyhow = "1.0"
 argh = "0.1"
 wait-timeout = "0.2"
 
+[dev-dependencies]
+lspce-module = { path = ".", features = ["test-utils"] }
+
+[features]
+test-utils = []
+
 [profile.dev]
 debug = 0
 
 [profile.release]
 lto = true
 codegen-units = 1
+
+[[test]]
+name = "integrations"
+path = "tests/integrations.rs"
+required-features = ["test-utils"]
