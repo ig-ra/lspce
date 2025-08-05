@@ -73,8 +73,30 @@ pub fn setup_test_logger() {
 #[cfg(test)]
 mod shutdown_lspserver {
     use super::*;
-    use std::thread;
-    use std::time::Duration;
+    use std::{process, thread, time::Duration};
+
+    enum ExitType {
+        Code(i32),
+        Signal(i32),
+    }
+
+    fn assert_exit_status(exit_status: Option<process::ExitStatus>, expected: ExitType) {
+        assert!(exit_status.is_some(), "Should return Some(exit_status)");
+        let exit_status = exit_status.unwrap();
+
+        match expected {
+            ExitType::Code(exp) => {
+                let code = exit_status.code().unwrap();
+                assert_eq!(code, exp, "Should exit with code: {} != {}", exp, code);
+            }
+            #[cfg(unix)]
+            ExitType::Signal(exp) => {
+                use std::os::unix::process::ExitStatusExt;
+                let signal = exit_status.signal().unwrap();
+                assert_eq!(signal, exp, "Should exit with signal: {} != {:?}", exp, signal);
+            }
+        }
+    }
 
     fn make_test_server(cmd: &str, args: &str) -> LspServer {
         //setup_test_logger();
@@ -90,16 +112,15 @@ mod shutdown_lspserver {
         assert!(server.sender.is_none(), "Sender should be None after shutdown");
     }
 
-    fn assert_teardown_idempotent(mut server: LspServer, timeout: Duration, desc: &str, expect_some: bool) {
+    fn assert_teardown_idempotent(mut server: LspServer, timeout: Duration, desc: &str, expected_exit: ExitType) {
         // First shutdown
-        let result = server.teardown(timeout);
-        assert!(result.is_ok(), "{desc}: first shutdown should succeed");
-        if expect_some {
-            assert!(matches!(result.unwrap(), Some(_)), "{desc}: first shutdown should return Some(exit_status)");
-        }
-        assert_resources(&server);
+        let exit_status = server.teardown(timeout);
+        assert!(exit_status.is_ok(), "{desc}: first shutdown should succeed");
 
-        // Second shutdown (idempotency)
+        assert_resources(&server);
+        assert_exit_status(exit_status.unwrap(), expected_exit);
+
+        // Second shutdown (idempotency) ----v
 
         // disable logging to avoid duplicated messages and noise in idenpotent tests
         let level = logger::get_log_level();
@@ -113,22 +134,36 @@ mod shutdown_lspserver {
         logger::set_log_level(level); // reenable
     }
 
+    #[cfg(unix)]
     #[test]
-    fn test_graceful_shutdown() {
+    fn test_graceful_shutdown_lsp_exit() {
+        // simulated LSP is already dead - e.g. true should return immediately
         let server = make_test_server("true", "");
-        assert_teardown_idempotent(server, Duration::from_secs(1), "graceful", true);
+        assert_teardown_idempotent(server, Duration::from_secs(1), "graceful + LSP exit", ExitType::Code(0));
     }
 
+    #[cfg(unix)]
+    #[test]
+    fn test_graceful_shutdown_lsp_killed() {
+        // simulated LSP is already dead - e.g. true should return immediately
+        let mut server = make_test_server("sleep", "5");
+
+        server.resources.child.as_mut().unwrap().kill().expect("Failed to kill child LSP process");
+        assert_teardown_idempotent(server, Duration::from_secs(1), "graceful + LSP killed", ExitType::Signal((9)));
+    }
+
+    #[cfg(unix)]
     #[test]
     fn test_forced_shutdown() {
         let server = make_test_server("sleep", "5");
-        assert_teardown_idempotent(server, Duration::ZERO, "forced", false);
+        assert_teardown_idempotent(server, Duration::ZERO, "forced", ExitType::Signal(9));
     }
 
+    #[cfg(unix)]
     #[test]
     fn test_graceful_escalates_to_forced_shutdown() {
         let server = make_test_server("sleep", "5");
-        assert_teardown_idempotent(server, Duration::from_millis(100), "graceful escalates to forced", false);
+        assert_teardown_idempotent(server, Duration::from_millis(100), "graceful -> forced", ExitType::Signal(9));
     }
 }
 
