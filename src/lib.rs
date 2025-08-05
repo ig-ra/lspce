@@ -8,6 +8,10 @@ mod socket;
 mod stdio;
 mod utils;
 
+// for both lib and integrations tests
+#[cfg(any(test, feature = "test-utils"))]
+pub mod test_utils;
+
 #[cfg(test)]
 mod tests;
 

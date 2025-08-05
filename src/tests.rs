@@ -72,31 +72,9 @@ pub fn setup_test_logger() {
 
 #[cfg(test)]
 mod shutdown_lspserver {
+    use super::test_utils::*;
     use super::*;
     use std::{process, thread, time::Duration};
-
-    enum ExitType {
-        Code(i32),
-        Signal(i32),
-    }
-
-    fn assert_exit_status(exit_status: Option<process::ExitStatus>, expected: ExitType) {
-        assert!(exit_status.is_some(), "Should return Some(exit_status)");
-        let exit_status = exit_status.unwrap();
-
-        match expected {
-            ExitType::Code(exp) => {
-                let code = exit_status.code().unwrap();
-                assert_eq!(code, exp, "Should exit with code: {} != {}", exp, code);
-            }
-            #[cfg(unix)]
-            ExitType::Signal(exp) => {
-                use std::os::unix::process::ExitStatusExt;
-                let signal = exit_status.signal().unwrap();
-                assert_eq!(signal, exp, "Should exit with signal: {} != {:?}", exp, signal);
-            }
-        }
-    }
 
     fn make_test_server(cmd: &str, args: &str) -> LspServer {
         //setup_test_logger();
@@ -122,7 +100,7 @@ mod shutdown_lspserver {
 
         // Second shutdown (idempotency) ----v
 
-        // disable logging to avoid duplicated messages and noise in idenpotent tests
+        // disable logging to avoid duplicated messages and noise in idempotent tests
         let level = logger::get_log_level();
         logger::disable_logging();
 
