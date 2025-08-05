@@ -1,7 +1,9 @@
-use lspce_module::{shutdown_server, LspServer, Request};
-use std::time::Duration;
+use lspce_module::test_utils::*;
+use lspce_module::{logger, shutdown_server, LspServer, Request, ResourceState, ThreadResult};
+use std::{io, time::Duration};
 
 const DUMMY_LSP_CMD: &str = "target/debug/dummy_lsp";
+const ONE_SEC: Duration = Duration::from_secs(1);
 
 /// Creates a mock Env, uses it for the provided function, and then
 /// safely disposes of it without running its destructor
@@ -27,10 +29,12 @@ where
     result
 }
 
-fn setup_logger() {
-    lspce_module::set_log_file("/dev/stdout").unwrap();
-    // Enable debug logging to see message contents
-    lspce_module::LOG_LEVEL.store(lspce_module::LOG_DEBUG, std::sync::atomic::Ordering::Relaxed);
+// handy for manual testing and to see log messages
+pub fn setup_test_logger() {
+    #[cfg(unix)]
+    logger::set_log_file_name("/dev/stderr".to_string());
+
+    logger::enable_logging();
 }
 
 fn make_request(id: &mut i32, method: &str, params: serde_json::Value) -> Request {
@@ -51,49 +55,73 @@ fn make_request(id: &mut i32, method: &str, params: serde_json::Value) -> Reques
     serde_json::from_value(json).expect(&format!("Failed to parse {} request JSON", method))
 }
 
-fn start_end_initialize_server(id: &mut i32, args: &str) -> LspServer {
-    setup_logger();
+fn start_and_initialize_server(_id: &mut i32, args: &str) -> LspServer {
+    setup_test_logger();
+    lspce_module::lspce_init();
 
     // create new dummy_lsp server with provided args
-    let mut server = LspServer::new(DUMMY_LSP_CMD, args, "{}").expect("should create test server");
+    let server = LspServer::new(DUMMY_LSP_CMD, args, "{}").expect("should create test server");
 
-    // Create initialize request
-    let initialize_req = make_request(
-        id,
-        "initialize",
-        serde_json::json!({
-            "processId": serde_json::Value::Null, // FIXME: should we pass real one?
-            "rootUri": serde_json::Value::Null,
-            "capabilities": {}
-        }),
-    );
+    // // Create initialize request
+    // let initialize_req = make_request(
+    //     id,
+    //     "initialize",
+    //     serde_json::json!({
+    //         "processId": serde_json::Value::Null, // FIXME: should we pass real one?
+    //         "rootUri": serde_json::Value::Null,
+    //         "capabilities": {}
+    //     }),
+    // );
 
-    with_mock_env(|env| {
-        lspce_module::initialize(env, &mut server, initialize_req, Duration::from_secs(1))
-            .expect("Failed to initialize LSP server")
-    });
+    // with_mock_env(|env| {
+    //     lspce_module::initialize(env, &mut server, initialize_req, Duration::from_secs(1))
+    //         .expect("Failed to initialize LSP server")
+    // });
 
     server
 }
 
-fn assert_exit_status(exit_status: Option<std::process::ExitStatus>, expected_code: Option<i32>) {
-    assert!(exit_status.is_some(), "Should return Some(exit_status)");
-    let exit_status = exit_status.unwrap();
-
-    match expected_code {
-        Some(code) => {
-            assert_eq!(exit_status.code().unwrap(), code, "Should exit with expected code");
-        }
-        None => {
-            assert!(exit_status.code().is_none(), "Expected exit code to be None");
-            #[cfg(unix)]
-            {
-                use std::os::unix::process::ExitStatusExt;
-                const SIGKILL: i32 = 9;
-                assert_eq!(exit_status.signal().unwrap(), SIGKILL, "Should be killed by expected signal");
+fn assert_thread_states(state: &ResourceState, expected: [Vec<ThreadResult>; 3]) {
+    for (i, (actual, allowed)) in state.transport.iter().zip(expected.iter()).enumerate() {
+        let mut matched = false;
+        for exp in allowed {
+            match (actual, exp) {
+                (ThreadResult::NotJoined, ThreadResult::NotJoined) => matched = true,
+                (ThreadResult::Ok, ThreadResult::Ok) => matched = true,
+                (ThreadResult::Panic(_), ThreadResult::Panic(_)) => matched = true,
+                (ThreadResult::IoError(e), ThreadResult::IoError(exp)) if e.kind() == exp.kind() => matched = true,
+                _ => {}
+            }
+            if matched {
+                break;
             }
         }
+        assert!(matched, "Thread {}: state <{:?}> did not match any of <{:?}>", i, actual, allowed);
     }
+}
+
+fn thread_res_io_err(kind: io::ErrorKind) -> ThreadResult {
+    ThreadResult::IoError(io::Error::from(kind))
+}
+
+fn ok() -> Vec<ThreadResult> {
+    vec![ThreadResult::Ok]
+}
+
+fn eof() -> Vec<ThreadResult> {
+    vec![thread_res_io_err(io::ErrorKind::UnexpectedEof)]
+}
+
+fn disconnect() -> Vec<ThreadResult> {
+    vec![thread_res_io_err(io::ErrorKind::NotConnected)]
+}
+
+fn ok_or_eof() -> Vec<ThreadResult> {
+    vec![thread_res_io_err(io::ErrorKind::UnexpectedEof), ThreadResult::Ok]
+}
+
+fn ok_or_disconnect() -> Vec<ThreadResult> {
+    vec![thread_res_io_err(io::ErrorKind::NotConnected), ThreadResult::Ok]
 }
 
 #[test]
@@ -101,34 +129,47 @@ fn test_graceful_shutdown() {
     let mut id = 5;
     let exit_val = 5;
 
-    let server = start_end_initialize_server(&mut id, &format!("--exit-value {}", exit_val));
+    let mut server = start_and_initialize_server(&mut id, &format!("--exit-value {}", exit_val));
     let shutdown_req = make_request(&mut id, "shutdown", serde_json::Value::Null);
-    let result = shutdown_server(server, shutdown_req);
+    let exit_status = shutdown_server(&mut server, shutdown_req, Some(ONE_SEC));
 
-    assert!(result.is_ok(), "shutdown_server should succeed");
-    assert_exit_status(result.unwrap(), Some(exit_val));
+    // LSP<(STDIN) / LSPCE WRITER shoudl exit on flag
+    // LSP>(STDOUT) / LSPCE READER shoudl exit on EOF, since it's blocked on reading from LSP.
+    // LSP!/STDERR should either exit with OK (exit flag), or EOF, depends on timing
+    assert_thread_states(&server.resources.state, [ok(), eof(), ok_or_eof()]);
+    assert_exit_status(exit_status.unwrap(), ExitType::Code(exit_val)); // exit status should be OK(...)
 }
 
+// Tests failures in shutdown protocol.
+// We ask our dummy server to refuse shutdown, but there could be more cases which result in the
+// same - wrong shutdown id, ignoring or not reacting to exit, taking too much time, etc...
 #[test]
-fn test_graceful_shutdown_escalated_no_shutdown() {
+fn test_graceful_shutdown_escalated_to_forced() {
     let mut id = 10;
 
-    let server = start_end_initialize_server(&mut id, "--ignore-shutdown");
+    let mut server = start_and_initialize_server(&mut id, "--ignore-shutdown");
     let shutdown_req = make_request(&mut id, "shutdown", serde_json::Value::Null);
-    let result = shutdown_server(server, shutdown_req);
+    let exit_status = shutdown_server(&mut server, shutdown_req, Some(ONE_SEC));
 
-    assert!(result.is_ok(), "shutdown_server should succeed");
-    assert_exit_status(result.unwrap(), None);
+    // LSP<(STDIN) / LSPCE WRITER shoudl exit due to disconnected channel from main thread
+    // LSP>(STDOUT) / LSPCE READER shoudl exit on EOF, since it's blocked on reading from LSP.
+    // LSP!/STDERR should either exit wither with OK (exit flag) or EOF, depends on timing
+    assert_thread_states(&server.resources.state, [disconnect(), eof(), ok_or_eof()]);
+    assert_exit_status(exit_status.unwrap(), ExitType::Signal(9)); // exit status should be OK(...)
 }
 
+// Although previous test actually tests the same, let's ensure what will happen wihtout shutdown sequence at all.
 #[test]
-fn test_graceful_shutdown_escalated_stuck_exit() {
-    let mut id = 10;
+fn test_shutdown_stalled() {
+    let mut id = 15;
 
-    let server = start_end_initialize_server(&mut id, "--ignore-exit");
+    let mut server = start_and_initialize_server(&mut id, "--ignore-shutdown");
     let shutdown_req = make_request(&mut id, "shutdown", serde_json::Value::Null);
-    let result = shutdown_server(server, shutdown_req);
+    let exit_status = shutdown_server(&mut server, shutdown_req, Some(ONE_SEC));
 
-    assert!(result.is_ok(), "shutdown_server should succeed");
-    assert_exit_status(result.unwrap(), None);
+    // LSP<(STDIN) / LSPCE WRITER shoudl exit due to disconnectd channel from main thread
+    // LSP>(STDOUT) / LSPCE READER shoudl exit on EOF, since it's blocked on reading from LSP.
+    // LSP!/STDERR should either exit with EOF, since it's blocked on reading from LSP.
+    assert_thread_states(&server.resources.state, [disconnect(), eof(), eof()]);
+    assert_exit_status(exit_status.unwrap(), ExitType::Signal(9)); // exit status should be OK(...)
 }

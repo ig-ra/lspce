@@ -135,12 +135,12 @@ pub struct Resources {
 }
 
 pub struct ResourceState {
-    transport: [ThreadResult; 3],
-    exit: Option<ExitStatus>,
+    pub transport: [ThreadResult; 3],
+    pub exit: Option<ExitStatus>,
 }
 
 pub struct LspServer {
-    resources: Resources,
+    pub resources: Resources,
     pub server_info: LspServerInfo,
     pub status: u8,
     sender: Option<Sender<Message>>,
