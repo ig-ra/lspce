@@ -29,18 +29,16 @@ use serde::{Deserialize, Serialize};
 use serde_json::json;
 
 use std::panic::Location;
-use std::result::Result as RustResult;
-
-use std::sync::atomic::{AtomicBool, AtomicI32, AtomicU8, Ordering};
-use std::time::{Duration, Instant};
 
 use std::{
     collections::{HashMap, VecDeque},
     fmt::Debug,
-    io::{Read, Write},
+    io::{self, Read, Write},
     process::{Child, Command, ExitStatus, Stdio},
+    sync::atomic::{AtomicBool, AtomicI32, AtomicU8, Ordering},
     sync::{Arc, LazyLock, Mutex},
     thread::{self, JoinHandle, Thread},
+    time::{Duration, Instant},
 };
 
 use logger::Logger;
@@ -119,26 +117,29 @@ impl LspServerData {
     }
 }
 
-/// Represents a Language Server Protocol (LSP) server instance.
-///
-/// This struct manages the lifecycle of an LSP server process, including:
+/// Represents the resources associated with LSP server instance
 /// - The child process handle
-/// - Server information (name, version, capabilities)
-/// - Connection state and transport threads
-/// - Server data and exit flag
-
+/// - Transport threads (reader, writer, stderr (optional))
+/// - Dispatcher thread
+/// - State of resources (join status of threads, exit status)
 pub struct Resources {
     child: Option<Child>,
     transport: Option<IoThreads>,
     dispatcher: Option<thread::JoinHandle<()>>,
     pub state: ResourceState,
 }
-
 pub struct ResourceState {
     pub transport: [ThreadResult; 3],
     pub exit: Option<ExitStatus>,
 }
 
+/// Represents a Language Server Protocol (LSP) server instance.
+///
+/// This struct manages the lifecycle of an LSP server process, including:
+/// - Resources (LSP child process and threads)
+/// - Server information (name, version, capabilities)
+/// - Connection state and transport threads
+/// - Server data and exit flag
 pub struct LspServer {
     pub resources: Resources,
     pub server_info: LspServerInfo,
@@ -351,9 +352,9 @@ impl LspServer {
 
     pub fn write<M: Into<Message>>(&self, msg: M) -> Result<()> {
         if let Some(sender) = &self.sender {
-            sender.send(msg.into()).context("failed to send(er)")
+            sender.send(msg.into()).context("Failed to send to LSP")
         } else {
-            Err(anyhow!("no send(er) channel"))
+            Err(anyhow!("no LSP sender channel"))
         }
     }
 
