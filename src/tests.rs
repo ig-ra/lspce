@@ -70,14 +70,16 @@ pub fn setup_test_logger() {
     logger::enable_logging();
 }
 
+/// Tests spawining real CMDs on linux and their exit statuses and signals. Mocking child is overkill
+#[cfg(unix)]
 #[cfg(test)]
-mod shutdown_lspserver {
+mod test_shutdown_with_real_cmd_as_fake_lspserver {
     use super::test_utils::*;
     use super::*;
     use std::{process, thread, time::Duration};
 
-    fn make_test_server(cmd: &str, args: &str) -> LspServer {
-        //setup_test_logger();
+    fn fake_server(cmd: &str, args: &str) -> LspServer {
+        //setup_test_logger(); // enable to see logs
         let mut server = LspServer::new(cmd, args, "{}").expect("Should create test server");
         server.status = SERVER_STATUS_RUNNING;
         server
@@ -99,49 +101,124 @@ mod shutdown_lspserver {
         assert_exit_status(exit_status.unwrap(), expected_exit);
 
         // Second shutdown (idempotency) ----v
-
-        // disable logging to avoid duplicated messages and noise in idempotent tests
         let level = logger::get_log_level();
-        logger::disable_logging();
+        logger::disable_logging(); // disable logging to avoid duplicated messages in log
 
         let result2 = server.teardown(timeout);
         assert!(result2.is_ok(), "{desc}: second shutdown should not panic");
         assert!(result2.unwrap().is_none(), "{desc}: second shutdown should return None");
         assert_resources(&server);
 
-        logger::set_log_level(level); // reenable
+        logger::set_log_level(level); // reenable log
     }
 
-    #[cfg(unix)]
     #[test]
     fn test_graceful_shutdown_lsp_exit() {
-        // simulated LSP is already dead - e.g. true should return immediately
-        let server = make_test_server("true", "");
+        let server = fake_server("true", ""); // true returns immediately, .e.g. simulates LSP voluntary exit
         assert_teardown_idempotent(server, Duration::from_secs(1), "graceful + LSP exit", ExitType::Code(0));
     }
 
-    #[cfg(unix)]
     #[test]
     fn test_graceful_shutdown_lsp_killed() {
-        // simulated LSP is already dead - e.g. true should return immediately
-        let mut server = make_test_server("sleep", "5");
-
+        let mut server = fake_server("sleep", "5"); // simulate external kill for LSP
         server.resources.child.as_mut().unwrap().kill().expect("Failed to kill child LSP process");
         assert_teardown_idempotent(server, Duration::from_secs(1), "graceful + LSP killed", ExitType::Signal((9)));
     }
 
-    #[cfg(unix)]
     #[test]
     fn test_forced_shutdown() {
-        let server = make_test_server("sleep", "5");
+        let server = fake_server("sleep", "5");
         assert_teardown_idempotent(server, Duration::ZERO, "forced", ExitType::Signal(9));
     }
 
-    #[cfg(unix)]
     #[test]
     fn test_graceful_escalates_to_forced_shutdown() {
-        let server = make_test_server("sleep", "5");
+        let server = fake_server("sleep", "5");
         assert_teardown_idempotent(server, Duration::from_millis(100), "graceful -> forced", ExitType::Signal(9));
     }
 }
 
+fn mock_server() -> (LspServer, Receiver<Message>, Sender<Message>) {
+    use ThreadResult::NotJoined;
+
+    let (s_lsp, r_emacs) = crossbeam_channel::unbounded::<Message>();
+    let (s_emacs, r_lsp) = crossbeam_channel::unbounded::<Message>();
+
+    let server = LspServer {
+        resources: Resources {
+            child: None,
+            transport: None,
+            dispatcher: None,
+            state: ResourceState { transport: [NotJoined, NotJoined, NotJoined], exit: None },
+        },
+        server_info: LspServerInfo::new(1),
+        status: SERVER_STATUS_RUNNING,
+        sender: Some(s_emacs),
+        server_data: Arc::new(Mutex::new(LspServerData::new())),
+        exit: Arc::new(AtomicBool::new(false)),
+        name_id: "mock_server".to_string(),
+    };
+    (server, r_lsp, s_lsp)
+}
+#[cfg(test)]
+mod test_lspserver_shutdown_with_mock {
+    use super::*;
+    use test_utils::*;
+
+    #[test]
+    fn test_shutdown_protocol_success() {
+        let (mut server, r_lsp, s_lsp) = mock_server();
+        let server_data = Arc::clone(&server.server_data);
+        let shutdown_req = Request::new_shutdown();
+        let req_id = shutdown_req.id.clone();
+
+        // Simulate the LSP server's response in a separate thread
+        let lsp_thread = std::thread::spawn(move || {
+            // 1. Assert that the LSP get the SHUTDOWN request
+            let shutdown_msg = r_lsp.recv_timeout(ONE_SEC).expect("Did not get SHUTDOWN");
+            assert!(matches!(shutdown_msg, Message::Request(req) if req.id == req_id && req.method == "shutdown"));
+            // 2. Send response back (push directly to server_data)
+            let shutdown_resp = Response::new_ok(req_id, None::<bool>).unwrap();
+            server_data.lock().unwrap().responses.push_back(shutdown_resp);
+
+            // 3. Assert that the LSP get the final EXIT notification.
+            let exit_msg = r_lsp.recv_timeout(ONE_SEC).expect("Did not get EXIT");
+            assert!(matches!(exit_msg, Message::Notification(notif) if notif.method == "exit"));
+        });
+
+        // test shutdown logic and assert that shutdown protocol succeeded.
+        let res = server.shutdown(shutdown_req, TWO_SECS);
+        assert!(res.is_ok(), "Shutdown should succeed vs {:?}", res);
+        assert_eq!(server.status, SERVER_STATUS_EXITING, "Server status should be EXITING");
+
+        lsp_thread.join().expect("LSP thread panicked");
+    }
+
+    #[test]
+    fn test_shutdown_protocol_timeout() {
+        let (mut server, r_lsp, s_lsp) = mock_server();
+        let shutdown_req = Request::new_shutdown();
+
+        // Run the shutdown logic, but provide no response. Use short timeout as well.
+        let result = server.shutdown(shutdown_req, Duration::from_millis(50));
+        assert!(
+            matches!(result, Err(ref e) if e.downcast_ref::<io::Error>().unwrap().kind() == io::ErrorKind::TimedOut),
+            "Shutdown should return Timeout error"
+        );
+        assert_eq!(server.status, SERVER_STATUS_SHUTTTING_DOWN, "Server status should remain SHUTTING_DOWN");
+    }
+
+    #[test]
+    fn test_shutdown_protocol_err() {
+        let (mut server, _, _) = mock_server(); // note that channels are dropped
+        let shutdown_req = Request::new_shutdown();
+
+        // Run the shutdown logic, but channel is already dropped. So we'll get an error on send
+        let result = server.shutdown(shutdown_req, Duration::from_millis(50));
+        assert!(
+            matches!(result, Err(ref e) if e.downcast_ref::<crossbeam_channel::SendError<Message>>().is_some()),
+            "Shutdown should return channel error"
+        );
+        assert_eq!(server.status, SERVER_STATUS_SHUTTTING_DOWN, "Server status should remain SHUTTING_DOWN");
+    }
+}
