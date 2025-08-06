@@ -216,27 +216,29 @@ impl LspServer {
     /// It does NOT tear down resources; it only handles the protocol handshake.
     ///
     /// # Returns
-    /// * `true` if the protocol handshake completed successfully within the timeout.
-    /// * `false` if the handshake failed or timed out.
-    pub fn shutdown(&mut self, req: Request, timeout: Duration) -> bool {
+    /// * Ok if the protocol handshake completed successfully within the timeout.
+    /// * Err if the handshake failed or timed out.
+    pub fn shutdown(&mut self, req: Request, timeout: Duration) -> Result<()> {
         self.status = SERVER_STATUS_SHUTTTING_DOWN;
         Logger::info(format!("Starting shutdown protocol for {}", self.name_id));
         let req_id = req.id.clone();
 
-        if _request_async(self, req).is_ok() {
-            let start_time = Instant::now();
-            while start_time.elapsed() <= timeout {
-                if matches!(self.read_response(), Some(ref resp) if resp.id == req_id) {
-                    let _ = self.write(Notification::new_exit());
-                    self.status = SERVER_STATUS_EXITING;
-                    Logger::info(format!("Shutdown protocol finished for {}", self.name_id));
-                    return true; // graceful shutdown prococol completed sucessfully
-                }
-                thread::sleep(POLL_INTERVAL);
+        _request_async(self, req)?;
+
+        let start_time = Instant::now();
+        while start_time.elapsed() <= timeout {
+            if matches!(self.read_response(), Some(ref resp) if resp.id == req_id) {
+                self.write(Notification::new_exit());
+                self.status = SERVER_STATUS_EXITING;
+                Logger::info(format!("Shutdown protocol finished for {}", self.name_id));
+                return Ok(()); // graceful shutdown prococol completed sucessfully
             }
+            thread::sleep(POLL_INTERVAL);
         }
-        Logger::info(format!("Shutdown protocol failed for {}", self.name_id));
-        false // Timed out waiting for response
+
+        let msg = format!("Shutdown protocol timed out for {}", self.name_id);
+        Logger::info(&msg);
+        return Err(io::Error::new(io::ErrorKind::TimedOut, msg).into());
     }
 
     fn start_dispatcher(
@@ -773,9 +775,9 @@ pub fn initialize(env: &Env, server: &mut LspServer, req: Request, timeout: Dura
 ///
 pub fn shutdown_server(server: &mut LspServer, req: Request, timeout: Option<Duration>) -> Result<Option<ExitStatus>> {
     let mut timeout = timeout.unwrap_or(GRACEFUL_SHUTDOWN_TIMEOUT);
-    if !server.shutdown(req, timeout) {
-        // failed in protocol shutdown, proceed immediately to teardown.
-        timeout = Duration::ZERO;
+    if let Err(err) = server.shutdown(req, timeout) {
+        Logger::error(format!("Failed protocol failed for {}: {}", server.name_id, err));
+        timeout = Duration::ZERO; // don't wait, proceed immediately to teardown.
     }
     server.teardown(timeout)
 }
