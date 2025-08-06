@@ -1,12 +1,11 @@
 use crate::logger::Logger;
-use anyhow::Result;
 use std::process::{Child, ExitStatus};
 use std::time::Duration;
 use wait_timeout::ChildExt;
 
 /// Waits for a child process to exit with a timeout.
 /// Returns Ok(Some(status)) if the process exited, Ok(None) if it did not exit in time, or Err(e).
-pub fn wait_child_with_timeout(child: &mut Child, timeout: Duration, id: &str) -> Result<Option<ExitStatus>> {
+pub fn wait_child_with_timeout(child: &mut Child, timeout: Duration, id: &str) -> anyhow::Result<Option<ExitStatus>> {
     match child.wait_timeout(timeout) {
         Ok(Some(status)) => {
             Logger::info(format!("wait_timeout for {}: {}", id, status));
@@ -25,7 +24,9 @@ pub fn wait_child_with_timeout(child: &mut Child, timeout: Duration, id: &str) -
 
 /// Kills a child process and waits for it to exit with a timeout.
 /// Returns Ok(Some(status)) if the process exited, Ok(None) if it did not exit in time, or Err(e).
-pub fn kill_child_and_wait_with_timeout(child: &mut Child, timeout: Duration, id: &str) -> Result<Option<ExitStatus>> {
+pub fn kill_child_and_wait_with_timeout(
+    child: &mut Child, timeout: Duration, id: &str,
+) -> anyhow::Result<Option<ExitStatus>> {
     Logger::info(format!("forcefully terminating {}", id));
     if let Err(e) = child.kill() {
         Logger::error(format!("failed to kill {}: {}", id, e));
