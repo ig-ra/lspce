@@ -735,8 +735,7 @@ pub fn initialize(env: &Env, server: &mut LspServer, req: Request, timeout: Dura
             // FIXME: why do we need pretty? what do we do after?
             Logger::info(format!("initialize response {}", &response));
 
-            let ir: InitializeResult =
-                serde_json::from_value(response.result.context("Empty initialize response")?.clone())?;
+            let ir: InitializeResult = serde_json::from_value(response.result.context("Empty initialize response")?)?;
 
             let initialized = Notification::new("initialized", InitializedParams {})?;
             server.write(initialized)?;
