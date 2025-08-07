@@ -415,24 +415,6 @@ impl LspServer {
         Ok(None)
     }
 
-    /// joins dispatcher and transport threads.
-    pub fn join_threads(&mut self) {
-        Logger::debug(format!("Joining threads for {}", self.name_id));
-        if let Some(mut threads) = self.resources.transport.take() {
-            if let Err(e) = threads.join() {
-                Logger::error(format!("error on joining transport for {}: {}", self.name_id, e));
-            }
-            Logger::debug(format!("joined transport: {:?}", threads.results));
-            self.resources.state.transport = threads.results;
-        }
-
-        if let Some(handle) = self.resources.dispatcher.take() {
-            if let Err(e) = handle.join() {
-                Logger::error(format!("error on joining dispatcher for {}: {:?}", self.name_id, e));
-            }
-        }
-    }
-
     /// Tears down and cleanup LSP child process and associated threads
     ///
     /// 1. Signal the dispatcher thread and transport threads to stop
@@ -471,9 +453,22 @@ impl LspServer {
             }
         }
 
-        self.join_threads();
-        Logger::debug(format!("finished teardown for {}", self.name_id));
+        Logger::debug(format!("Joining threads for {}", self.name_id));
+        if let Some(mut threads) = self.resources.transport.take() {
+            if let Err(e) = threads.join() {
+                Logger::error(format!("Error joining transport for {}: {}", self.name_id, e));
+            }
+            Logger::debug(format!("joined transport: {:?}", threads.results));
+            self.resources.state.transport = threads.results;
+        }
 
+        if let Some(handle) = self.resources.dispatcher.take() {
+            if let Err(e) = handle.join() {
+                Logger::error(format!("Error joining dispatcher for {}: {:?}", self.name_id, e));
+            }
+        }
+
+        Logger::debug(format!("finished teardown for {}", self.name_id));
         status
     }
 }
