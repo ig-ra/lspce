@@ -17,7 +17,7 @@ mod tests;
 
 use anyhow::{anyhow, bail, Context};
 use crossbeam_channel::{Receiver, Sender};
-use emacs::{defun, Env, IntoLisp, Result, Value};
+use emacs::{defun, Env, IntoLisp, Result as EmacsResult, Value};
 
 use lsp_types::{
     Diagnostic, DidChangeTextDocumentParams, InitializeResult, InitializedParams, PublishDiagnosticsParams,
@@ -160,7 +160,7 @@ fn name_id(name: &str, id: &str) -> String {
 }
 
 impl LspServer {
-    pub fn new(cmd: &str, cmd_args: &str, emacs_envs: &str) -> Result<LspServer> {
+    pub fn new(cmd: &str, cmd_args: &str, emacs_envs: &str) -> EmacsResult<LspServer> {
         let args = cmd_args.split_ascii_whitespace().collect::<Vec<&str>>();
 
         let mut command = Command::new(cmd);
@@ -223,7 +223,7 @@ impl LspServer {
     /// # Returns
     /// * Ok if the protocol handshake completed successfully within the timeout.
     /// * Err if the handshake failed or timed out.
-    pub fn shutdown(&mut self, req: Request, timeout: Duration) -> Result<()> {
+    pub fn shutdown(&mut self, req: Request, timeout: Duration) -> EmacsResult<()> {
         self.status = ServerStatus::ShuttingDown;
         Logger::info(format!("Starting shutdown protocol for {}", self.name_id));
         let req_id = req.id.clone();
@@ -357,7 +357,7 @@ impl LspServer {
         server_data.latest_response_tick.clone()
     }
 
-    pub fn write<M: Into<Message>>(&self, msg: M) -> Result<()> {
+    pub fn write<M: Into<Message>>(&self, msg: M) -> EmacsResult<()> {
         if let Some(sender) = &self.sender {
             sender.send(msg.into()).context("Failed to send to LSP")
         } else {
@@ -413,7 +413,7 @@ impl LspServer {
         }
     }
 
-    pub fn kill_child(&mut self) -> Result<Option<ExitStatus>> {
+    pub fn kill_child(&mut self) -> EmacsResult<Option<ExitStatus>> {
         if let Some(mut child) = self.resources.child.take() {
             return kill_child_and_wait_with_timeout(&mut child, KILL_WAIT_TIMEOUT, &self.name_id);
         }
@@ -437,7 +437,7 @@ impl LspServer {
     /// * `Ok(Some(status))` if the process exited (gracefully or forcibly) and an exit status is available.
     /// * `Ok(None)` if the process did not exit within the allowed time.
     /// * `Err(e)` if an error occurred during shutdown.
-    pub fn teardown(&mut self, graceful_timeout: Duration) -> Result<Option<ExitStatus>> {
+    pub fn teardown(&mut self, graceful_timeout: Duration) -> EmacsResult<Option<ExitStatus>> {
         self.exit.store(true, Ordering::Relaxed);
         self.status = ServerStatus::TearingDown;
         Logger::debug(format!("teardown {}", self.name_id));
@@ -545,11 +545,11 @@ fn reap_dead_servers() {
 emacs::plugin_is_GPL_compatible!();
 
 trait EnvExt {
-    fn lspce_message(&self, text: impl AsRef<str>) -> Result<Value<'_>>;
+    fn lspce_message(&self, text: impl AsRef<str>) -> EmacsResult<Value<'_>>;
 }
 
 impl EnvExt for Env {
-    fn lspce_message(&self, text: impl AsRef<str>) -> Result<Value<'_>> {
+    fn lspce_message(&self, text: impl AsRef<str>) -> EmacsResult<Value<'_>> {
         self.message(format!("[lspce-module] {}", text.as_ref()))
     }
 }
@@ -568,51 +568,51 @@ pub fn lspce_init() {
 // Register the initialization hook that Emacs will call when it loads the module.
 #[cfg(not(test))]
 #[emacs::module(name("lspce-module"))]
-fn init(env: &Env) -> Result<Value<'_>> {
+fn init(env: &Env) -> EmacsResult<Value<'_>> {
     lspce_init();
     env.lspce_message("Done loading")
 }
 
 #[defun]
-fn change_max_diagnostics_count(env: &Env, count: i32) -> Result<Value<'_>> {
+fn change_max_diagnostics_count(env: &Env, count: i32) -> EmacsResult<Value<'_>> {
     MAX_DIAGNOSTICS_COUNT.store(count, Ordering::Relaxed);
     env.lspce_message(format!("Set max diagnostics count to {}", count))
 }
 
 #[defun]
-fn read_max_diagnostics_count(env: &Env) -> Result<i32> {
+fn read_max_diagnostics_count(env: &Env) -> EmacsResult<i32> {
     let count = MAX_DIAGNOSTICS_COUNT.load(Ordering::Relaxed);
     Ok(count)
 }
 
 /// disable logging to /tmp/lspce.log
 #[defun]
-fn disable_logging(env: &Env) -> Result<Value<'_>> {
+fn disable_logging(env: &Env) -> EmacsResult<Value<'_>> {
     logger::disable_logging();
     env.lspce_message("Logging is disabled")
 }
 
 /// enable logging to /tmp/lspce.log
 #[defun]
-fn enable_logging(env: &Env) -> Result<Value<'_>> {
+fn enable_logging(env: &Env) -> EmacsResult<Value<'_>> {
     logger::enable_logging();
     env.lspce_message("Logging is enabled")
 }
 
 #[defun]
-fn set_log_level(env: &Env, level: u8) -> Result<Value<'_>> {
+fn set_log_level(env: &Env, level: u8) -> EmacsResult<Value<'_>> {
     logger::set_log_level(level);
     env.lspce_message(format!("Set log level to {}", level))
 }
 
 #[defun]
-fn get_log_level(env: &Env) -> Result<u8> {
+fn get_log_level(env: &Env) -> EmacsResult<u8> {
     Ok(logger::get_log_level())
 }
 
 /// set logging file name
 #[defun]
-fn set_log_file(env: &Env, file: String) -> Result<Value<'_>> {
+fn set_log_file(env: &Env, file: String) -> EmacsResult<Value<'_>> {
     let message = format!("Set logging file to {}", file);
     logger::set_log_file_name(file);
     env.lspce_message(message)
@@ -639,9 +639,9 @@ macro_rules! env_message_and_bail {
 }
 
 #[track_caller]
-fn with_project<F, T>(env: &Env, root_uri: &str, caller_loc: Option<&Location<'static>>, f: F) -> Result<Option<T>>
+fn with_project<F, T>(env: &Env, root_uri: &str, caller_loc: Option<&Location<'static>>, f: F) -> EmacsResult<Option<T>>
 where
-    F: FnOnce(&mut Project) -> Result<Option<T>>,
+    F: FnOnce(&mut Project) -> EmacsResult<Option<T>>,
 {
     let mut projects_guard = projects().lock().unwrap();
     let caller = Some(caller_loc.unwrap_or_else(|| Location::caller()));
@@ -655,9 +655,9 @@ where
 }
 
 #[track_caller]
-fn with_server<F, T>(env: &Env, root_uri: &str, file_type: &str, f: F) -> Result<Option<T>>
+fn with_server<F, T>(env: &Env, root_uri: &str, file_type: &str, f: F) -> EmacsResult<Option<T>>
 where
-    F: FnOnce(&mut LspServer) -> Result<Option<T>>,
+    F: FnOnce(&mut LspServer) -> EmacsResult<Option<T>>,
 {
     let caller = Some(Location::caller());
     with_project(env, root_uri, caller, |project| match project.servers.get_mut(file_type) {
@@ -675,9 +675,9 @@ where
 
 /// Executes a closure `f` and on error, log and return `Ok(None)`.
 #[track_caller]
-fn safe_call<T, F>(f: F) -> Result<Option<T>>
+fn safe_call<T, F>(f: F) -> EmacsResult<Option<T>>
 where
-    F: FnOnce() -> Result<Option<T>>, // Result<T> is result::Result<T, anyhow::Error>
+    F: FnOnce() -> EmacsResult<Option<T>>, // Result<T> is result::Result<T, anyhow::Error>
 {
     match f() {
         ok @ Ok(_) => ok,
@@ -694,7 +694,7 @@ where
 fn connect(
     env: &Env, root_uri: String, lsp_type: String, cmd: String, cmd_args: String, initialize_req_str: String,
     timeout: i32, emacs_envs: String,
-) -> Result<Option<String>> {
+) -> EmacsResult<Option<String>> {
     let prj_name_type = format!("{}({})", root_uri, lsp_type);
     Logger::info(format!("Creating and initializing LSP server for {}", prj_name_type));
 
@@ -727,7 +727,7 @@ fn connect(
     Ok(Some(serde_json::to_string(&server_info)?))
 }
 
-pub fn initialize(env: &Env, server: &mut LspServer, req: Request, timeout: Duration) -> Result<()> {
+pub fn initialize(env: &Env, server: &mut LspServer, req: Request, timeout: Duration) -> EmacsResult<()> {
     Logger::info(format!("initialize request {}", &req));
     _request_async(server, req)?;
 
@@ -775,7 +775,9 @@ pub fn initialize(env: &Env, server: &mut LspServer, req: Request, timeout: Dura
 /// * `req` - The `shutdown` request to send to the server.
 /// * `timeout` - Timeout to complete gracefull shutdown process
 ///
-pub fn shutdown_server(server: &mut LspServer, req: Request, timeout: Option<Duration>) -> Result<Option<ExitStatus>> {
+pub fn shutdown_server(
+    server: &mut LspServer, req: Request, timeout: Option<Duration>,
+) -> EmacsResult<Option<ExitStatus>> {
     let mut timeout = timeout.unwrap_or(GRACEFUL_SHUTDOWN_TIMEOUT);
     let start_time = Instant::now();
     let shutdown_proto_res = server.shutdown(req, timeout);
@@ -793,7 +795,7 @@ pub fn shutdown_server(server: &mut LspServer, req: Request, timeout: Option<Dur
 // Spans a thread to shut down the server to avoid blocking emacs while performing LSP shutdown sequence.
 #[defun_safe]
 #[defun]
-fn shutdown(env: &Env, root_uri: String, file_type: String, request: String) -> Result<Option<bool>> {
+fn shutdown(env: &Env, root_uri: String, file_type: String, request: String) -> EmacsResult<Option<bool>> {
     with_project(env, &root_uri, None, |project| {
         if let Some(Some(mut server)) = project.servers.remove(&file_type) {
             let shutdown_req = Message::from_str_typed::<Request>(&request).unwrap_or_else(|e| {
@@ -810,7 +812,7 @@ fn shutdown(env: &Env, root_uri: String, file_type: String, request: String) -> 
 
 #[defun_safe]
 #[defun]
-fn server(env: &Env, root_uri: String, file_type: String) -> Result<Option<String>> {
+fn server(env: &Env, root_uri: String, file_type: String) -> EmacsResult<Option<String>> {
     with_project(env, &root_uri, None, |project| match project.servers.get(&file_type) {
         Some(Some(server)) => {
             Ok(Some(serde_json::to_string(&server.server_info).context("failed to serialize server info")?))
@@ -821,7 +823,7 @@ fn server(env: &Env, root_uri: String, file_type: String) -> Result<Option<Strin
     })
 }
 
-fn _request_async(server: &mut LspServer, req: Request) -> Result<Option<bool>> {
+fn _request_async(server: &mut LspServer, req: Request) -> EmacsResult<Option<bool>> {
     let request_tick = req.request_tick.as_ref().map(|s| s.clone()).unwrap_or_else(|| {
         use std::time::{SystemTime, UNIX_EPOCH};
         let now = SystemTime::now().duration_since(UNIX_EPOCH).unwrap();
@@ -843,7 +845,7 @@ fn _request_async(server: &mut LspServer, req: Request) -> Result<Option<bool>> 
 
 #[defun_safe]
 #[defun]
-fn request_async(env: &Env, root_uri: String, file_type: String, json: String) -> Result<Option<bool>> {
+fn request_async(env: &Env, root_uri: String, file_type: String, json: String) -> EmacsResult<Option<bool>> {
     with_server(env, &root_uri, &file_type, |server| {
         Logger::trace(format!("request {}", &json));
         let msg = Message::from_str_typed::<Request>(&json).context("request_async")?;
@@ -853,7 +855,7 @@ fn request_async(env: &Env, root_uri: String, file_type: String, json: String) -
 
 #[defun_safe]
 #[defun]
-fn notify(env: &Env, root_uri: String, file_type: String, json: String) -> Result<Option<bool>> {
+fn notify(env: &Env, root_uri: String, file_type: String, json: String) -> EmacsResult<Option<bool>> {
     with_server(env, &root_uri, &file_type, |server| {
         Logger::trace(format!("notify {}", &json));
         let msg = Message::from_str_typed::<Notification>(&json).context("notify")?;
@@ -867,7 +869,7 @@ fn notify(env: &Env, root_uri: String, file_type: String, json: String) -> Resul
 #[defun]
 fn read_response_exact(
     env: &Env, root_uri: String, file_type: String, id: String, method: String,
-) -> Result<Option<String>> {
+) -> EmacsResult<Option<String>> {
     with_server(env, &root_uri, &file_type, |server| {
         Ok(server.read_response_exact(RequestId::from(id), method).map(|r| r.into_string()))
     })
@@ -875,13 +877,13 @@ fn read_response_exact(
 
 #[defun_safe]
 #[defun]
-fn read_notification(env: &Env, root_uri: String, file_type: String) -> Result<Option<String>> {
+fn read_notification(env: &Env, root_uri: String, file_type: String) -> EmacsResult<Option<String>> {
     with_server(env, &root_uri, &file_type, |server| Ok(server.read_notification().map(|r| r.into_string())))
 }
 
 #[defun_safe]
 #[defun]
-fn read_file_diagnostics(env: &Env, root_uri: String, file_type: String, uri: String) -> Result<Option<String>> {
+fn read_file_diagnostics(env: &Env, root_uri: String, file_type: String, uri: String) -> EmacsResult<Option<String>> {
     with_server(env, &root_uri, &file_type, |server| {
         let mut server_data = server.server_data.lock().unwrap();
         Ok(server_data
@@ -894,12 +896,12 @@ fn read_file_diagnostics(env: &Env, root_uri: String, file_type: String, uri: St
 
 #[defun_safe]
 #[defun]
-fn read_latest_response_id(env: &Env, root_uri: String, file_type: String) -> Result<Option<String>> {
+fn read_latest_response_id(env: &Env, root_uri: String, file_type: String) -> EmacsResult<Option<String>> {
     with_server(env, &root_uri, &file_type, |server| Ok(Some(server.get_latest_response_id().to_string())))
 }
 
 #[defun_safe]
 #[defun]
-fn read_latest_response_tick(env: &Env, root_uri: String, file_type: String) -> Result<Option<String>> {
+fn read_latest_response_tick(env: &Env, root_uri: String, file_type: String) -> EmacsResult<Option<String>> {
     with_server(env, &root_uri, &file_type, |server| Ok(Some(server.get_latest_response_tick())))
 }

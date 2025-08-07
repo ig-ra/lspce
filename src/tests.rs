@@ -2,7 +2,7 @@ use super::*;
 
 #[cfg(test)]
 mod test_safe_call {
-    use super::{safe_call, Result};
+    use super::{safe_call, EmacsResult};
     use anyhow::bail;
 
     #[test]
@@ -16,7 +16,7 @@ mod test_safe_call {
         assert_eq!(safe_call(|| { Ok(None) }).unwrap(), None::<bool>, "case OK(None)");
 
         // Case 3: Еrr() -> convert to Ok(None)
-        assert_eq!(safe_call(|| -> Result<Option<bool>> { bail!("fail") }).unwrap(), None::<bool>, "Case: test_error");
+        assert_eq!(safe_call(|| -> EmacsResult<Option<bool>> { bail!("fail") }).unwrap(), None::<bool>, "case Err()");
     }
 }
 
