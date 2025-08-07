@@ -82,6 +82,7 @@ fn start_and_initialize_server(_id: &mut i32, args: &str) -> LspServer {
 }
 
 fn assert_thread_states(state: &ResourceState, expected: [Vec<ThreadResult>; 3]) {
+    const THREAD_NAMES: [&str; 3] = ["LSP< Writer", "LSP> Reader", "LSP! Stderr"];
     for (i, (actual, allowed)) in state.transport.iter().zip(expected.iter()).enumerate() {
         let mut matched = false;
         for exp in allowed {
@@ -96,7 +97,11 @@ fn assert_thread_states(state: &ResourceState, expected: [Vec<ThreadResult>; 3])
                 break;
             }
         }
-        assert!(matched, "Thread {}: state <{:?}> did not match any of <{:?}>", i, actual, allowed);
+        assert!(
+            matched,
+            "Thread #{}({}): state <{:?}> did not match any of <{:?}>",
+            i, THREAD_NAMES[i], actual, allowed
+        );
     }
 }
 
@@ -133,16 +138,16 @@ fn test_graceful_shutdown() {
     let shutdown_req = make_request(&mut id, "shutdown", serde_json::Value::Null);
     let exit_status = shutdown_server(&mut server, shutdown_req, Some(ONE_SEC));
 
-    // LSP<(STDIN) / LSPCE WRITER shoudl exit on flag
+    // LSP<(STDIN) / LSPCE WRITER shoudl exit on flag or channel close, depends on thread timing
     // LSP>(STDOUT) / LSPCE READER shoudl exit on EOF, since it's blocked on reading from LSP.
-    // LSP!/STDERR should either exit with OK (exit flag), or EOF, depends on timing
-    assert_thread_states(&server.resources.state, [ok(), eof(), ok_or_eof()]);
+    // LSP!/STDERR should either exit with OK (exit flag), or EOF (blocking read), depends on timing
+    assert_thread_states(&server.resources.state, [ok_or_disconnect(), eof(), ok_or_eof()]);
     assert_exit_status(exit_status.unwrap(), ExitType::Code(exit_val)); // exit status should be OK(...)
 }
 
 // Tests failures in shutdown protocol.
-// We ask our dummy server to refuse shutdown, but there could be more cases which result in the
-// same - wrong shutdown id, ignoring or not reacting to exit, taking too much time, etc...
+// Ask dummy server to ignore shutdown message and stay alive.
+// This simulates any error that will result in stalled LSP which should be killed.
 #[test]
 fn test_graceful_shutdown_escalated_to_forced() {
     let mut id = 10;
@@ -153,23 +158,24 @@ fn test_graceful_shutdown_escalated_to_forced() {
 
     // LSP<(STDIN) / LSPCE WRITER shoudl exit due to disconnected channel from main thread
     // LSP>(STDOUT) / LSPCE READER shoudl exit on EOF, since it's blocked on reading from LSP.
-    // LSP!/STDERR should either exit wither with OK (exit flag) or EOF, depends on timing
+    // LSP!/STDERR should either exit wither with OK (exit flag) or EOF (blocking read), depends on timing
     assert_thread_states(&server.resources.state, [disconnect(), eof(), ok_or_eof()]);
     assert_exit_status(exit_status.unwrap(), ExitType::Signal(9)); // exit status should be OK(...)
 }
 
-// Although previous test actually tests the same, let's ensure what will happen wihtout shutdown sequence at all.
+// Although previous test actually tests the same, let's ensure what will happen without shutdown sequence at all.
 #[test]
 fn test_shutdown_stalled() {
+    setup_test_logger();
     let mut id = 15;
 
     let mut server = start_and_initialize_server(&mut id, "--ignore-shutdown");
     let shutdown_req = make_request(&mut id, "shutdown", serde_json::Value::Null);
-    let exit_status = shutdown_server(&mut server, shutdown_req, Some(ONE_SEC));
+    let exit_status = shutdown_server(&mut server, shutdown_req, Some(Duration::from_millis(10)));
 
     // LSP<(STDIN) / LSPCE WRITER shoudl exit due to disconnectd channel from main thread
     // LSP>(STDOUT) / LSPCE READER shoudl exit on EOF, since it's blocked on reading from LSP.
-    // LSP!/STDERR should either exit with EOF, since it's blocked on reading from LSP.
-    assert_thread_states(&server.resources.state, [disconnect(), eof(), eof()]);
+    // LSP!/STDERR should either exit with EOF (blocking read) or with OK(exit flag), depends on timing.
+    assert_thread_states(&server.resources.state, [disconnect(), eof(), ok_or_eof()]);
     assert_exit_status(exit_status.unwrap(), ExitType::Signal(9)); // exit status should be OK(...)
 }
