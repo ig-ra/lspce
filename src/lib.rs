@@ -768,13 +768,20 @@ pub fn initialize(env: &Env, server: &mut LspServer, req: Request, timeout: Dura
 /// # Arguments
 /// * `server` - The `LspServer` instance to shut down.
 /// * `req` - The `shutdown` request to send to the server.
+/// * `timeout` - Timeout to complete gracefull shutdown process
 ///
 pub fn shutdown_server(server: &mut LspServer, req: Request, timeout: Option<Duration>) -> Result<Option<ExitStatus>> {
     let mut timeout = timeout.unwrap_or(GRACEFUL_SHUTDOWN_TIMEOUT);
-    if let Err(err) = server.shutdown(req, timeout) {
-        Logger::error(format!("Failed protocol failed for {}: {}", server.name_id, err));
-        timeout = Duration::ZERO; // don't wait, proceed immediately to teardown.
+    let start_time = Instant::now();
+    let shutdown_proto_res = server.shutdown(req, timeout);
+    let elapsed = start_time.elapsed();
+    timeout = timeout.checked_sub(elapsed).unwrap_or(Duration::ZERO);
+
+    if let Err(err) = shutdown_proto_res {
+        Logger::error(format!("Failed shutdown protocol for {}: {}", server.name_id, err));
+        timeout = Duration::ZERO; // don't wait exit of LSP, escalate to kill.
     }
+
     server.teardown(timeout)
 }
 
