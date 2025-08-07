@@ -417,12 +417,12 @@ impl LspServer {
 
     /// Tears down and cleanup LSP child process and associated threads
     ///
-    /// 1. Signal the dispatcher thread and transport threads to stop
-    /// 2. Join both dispatcher and transport threads
-    /// 3. Attempt to wait for the child LSP process, if provided graceful timeout is non-zero
+    /// 1. Set exit and dtop sender to signal the dispatcher and transport threads to stop
+    /// 2. Gracefully wait for the child LSP process to exit, if provided graceful timeout is non-zero
     /// 4. If the child process does not exit within the provided timeout, or error occured, or
     ///    no graceful timeout provided kill the child the process
-    /// 5. Wait (wth a timeout) for child process status to avoid leaving a zombie process.
+    /// 5. Wait (with a timeout) for child process status to avoid leaving a zombie process.
+    /// 6. Join dispatcher and trainsport threads.
     ///
     /// # Arguments
     /// * `graceful_timeout` - The maximum duration to wait for child to exit before sending kill signal.
@@ -433,20 +433,21 @@ impl LspServer {
     /// * `Ok(None)` if the process did not exit within the allowed time.
     /// * `Err(e)` if an error occurred during shutdown.
     pub fn teardown(&mut self, graceful_timeout: Duration) -> Result<Option<ExitStatus>> {
-        Logger::trace(format!("teardown {}", self.name_id));
         self.exit.store(true, Ordering::Relaxed);
+        Logger::debug(format!("teardown {}", self.name_id));
+
         // Drop the sender to close the channel and signal transport threads to exit
         self.sender.take(); // drop channel to cause writer thread to exit
 
         let mut status = Ok(None);
         if let Some(mut child) = self.resources.child.take() {
-            // Try graceful shutdown first
+            // wait for the child process to exit
             if graceful_timeout > Duration::ZERO {
                 Logger::debug(format!("waiting for exit of {}", self.name_id));
                 status = wait_child_with_timeout(&mut child, graceful_timeout, &self.name_id);
             }
 
-            // Either graceful shutdown did not succeed or no graceful timeout provided
+            // Proceed to force exit if needed
             if !matches!(status, Ok(Some(_))) {
                 self.resources.child = Some(child); // set back the child so kill_child can be used
                 status = self.kill_child();
