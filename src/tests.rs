@@ -222,3 +222,31 @@ mod test_lspserver_shutdown_with_mock {
         assert_eq!(server.status(), ServerStatus::ShuttingDown, "Server status should remain SHUTTING_DOWN");
     }
 }
+
+#[cfg(test)]
+mod test_lspserver_teardown {
+    use super::LspServer;
+    use std::{sync::Arc, thread, time::Duration};
+
+    #[test]
+    fn test_teardown_single_entry() {
+        // Create a dummy LspServer (you may need to mock or simplify construction)
+        let mut server = LspServer::new("true", "", "{}").unwrap();
+        let server = Arc::new(std::sync::Mutex::new(server));
+
+        let mut handles = vec![];
+        for _ in 0..5 {
+            let server = Arc::clone(&server);
+            handles.push(thread::spawn(move || server.lock().unwrap().teardown(Duration::ZERO)));
+        }
+
+        // ge all results.
+        let results: Vec<_> = handles.into_iter().map(|h| h.join().unwrap()).collect();
+
+        let enter_count = results.iter().filter(|r| matches!(r, Ok(Some(_)))).count();
+        let skip_count = results.iter().filter(|r| matches!(r, Ok(None))).count();
+
+        assert_eq!(enter_count, 1, "Only one thread should perform teardown");
+        assert_eq!(skip_count, results.len() - 1, "Other threads should see teardown already in progress");
+    }
+}
