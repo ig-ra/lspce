@@ -76,18 +76,23 @@ impl LspServerInfo {
     }
 }
 
-const SERVER_STATUS_NEW: u8 = 0;
-const SERVER_STATUS_STARTING: u8 = 1;
-const SERVER_STATUS_RUNNING: u8 = 2;
-const SERVER_STATUS_SHUTTTING_DOWN: u8 = 3;
-const SERVER_STATUS_EXITING: u8 = 4;
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[repr(u8)]
+pub enum ServerStatus {
+    New = 0,
+    Starting = 1,
+    Running = 2,
+    ShuttingDown = 3,
+    Exiting = 4,
+    TearingDown = 5,
+}
 
 const POLL_INTERVAL: Duration = Duration::from_millis(10);
 const GRACEFUL_SHUTDOWN_TIMEOUT: Duration = Duration::from_secs(3);
-const KILL_WAIT_TIMEOUT: Duration = GRACEFUL_SHUTDOWN_TIMEOUT;
-const MAX_NOTIFICATIONS: usize = 10;
-const DISPATCHER_SLEEP: Duration = Duration::from_millis(1);
+const KILL_WAIT_TIMEOUT: Duration = Duration::from_secs(2);
 const REAPER_INTERVAL: Duration = Duration::from_secs(5);
+
+const MAX_NOTIFICATIONS: usize = 10;
 
 struct LspServerData {
     latest_request_id: RequestId,
@@ -143,7 +148,7 @@ pub struct ResourceState {
 pub struct LspServer {
     pub resources: Resources,
     pub server_info: LspServerInfo,
-    pub status: u8,
+    pub status: ServerStatus,
     sender: Option<Sender<Message>>,
     server_data: Arc<Mutex<LspServerData>>,
     exit: Arc<AtomicBool>,
@@ -197,7 +202,7 @@ impl LspServer {
             resources,
             name_id: name_id(&server_info.name, &server_info.id),
             server_info: server_info,
-            status: SERVER_STATUS_STARTING,
+            status: ServerStatus::Starting,
             sender: Some(sender),
             server_data: Arc::new(Mutex::new(LspServerData::new())),
             exit: exit,
@@ -219,7 +224,7 @@ impl LspServer {
     /// * Ok if the protocol handshake completed successfully within the timeout.
     /// * Err if the handshake failed or timed out.
     pub fn shutdown(&mut self, req: Request, timeout: Duration) -> Result<()> {
-        self.status = SERVER_STATUS_SHUTTTING_DOWN;
+        self.status = ServerStatus::ShuttingDown;
         Logger::info(format!("Starting shutdown protocol for {}", self.name_id));
         let req_id = req.id.clone();
 
@@ -229,7 +234,7 @@ impl LspServer {
         while start_time.elapsed() <= timeout {
             if matches!(self.read_response(), Some(ref resp) if resp.id == req_id) {
                 self.write(Notification::new_exit());
-                self.status = SERVER_STATUS_EXITING;
+                self.status = ServerStatus::Exiting;
                 Logger::info(format!("Shutdown protocol finished for {}", self.name_id));
                 return Ok(()); // graceful shutdown prococol completed sucessfully
             }
@@ -434,6 +439,7 @@ impl LspServer {
     /// * `Err(e)` if an error occurred during shutdown.
     pub fn teardown(&mut self, graceful_timeout: Duration) -> Result<Option<ExitStatus>> {
         self.exit.store(true, Ordering::Relaxed);
+        self.status = ServerStatus::TearingDown;
         Logger::debug(format!("teardown {}", self.name_id));
 
         // Drop the sender to close the channel and signal transport threads to exit
@@ -480,7 +486,7 @@ impl Drop for LspServer {
         if self.resources.child.is_some() {
             Logger::trace(format!("drop {}", self.name_id));
             let _ = self.teardown(match self.status {
-                SERVER_STATUS_EXITING => GRACEFUL_SHUTDOWN_TIMEOUT,
+                ServerStatus::Exiting => GRACEFUL_SHUTDOWN_TIMEOUT,
                 _ => Duration::ZERO,
             });
         }
@@ -656,7 +662,7 @@ where
     let caller = Some(Location::caller());
     with_project(env, root_uri, caller, |project| match project.servers.get_mut(file_type) {
         Some(Some(server)) => {
-            if server.status != SERVER_STATUS_RUNNING {
+            if server.status != ServerStatus::Running {
                 env_message_and_bail!(env, @ caller, "LSP server for {}({}) is not ready", root_uri, file_type)
             }
             f(server)
@@ -746,7 +752,7 @@ pub fn initialize(env: &Env, server: &mut LspServer, req: Request, timeout: Dura
                 server.name_id = name_id(&server.server_info.name, &server.server_info.id);
                 server.server_info.version = si.version.unwrap_or_default();
             }
-            server.status = SERVER_STATUS_RUNNING;
+            server.status = ServerStatus::Running;
 
             return Ok(());
         }

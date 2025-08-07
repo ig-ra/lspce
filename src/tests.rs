@@ -81,7 +81,7 @@ mod test_shutdown_with_real_cmd_as_fake_lspserver {
     fn fake_server(cmd: &str, args: &str) -> LspServer {
         //setup_test_logger(); // enable to see logs
         let mut server = LspServer::new(cmd, args, "{}").expect("Should create test server");
-        server.status = SERVER_STATUS_RUNNING;
+        server.status = ServerStatus::Running;
         server
     }
 
@@ -152,7 +152,7 @@ fn mock_server() -> (LspServer, Receiver<Message>, Sender<Message>) {
             state: ResourceState { transport: [NotJoined, NotJoined, NotJoined], exit: None },
         },
         server_info: LspServerInfo::new(1),
-        status: SERVER_STATUS_RUNNING,
+        status: ServerStatus::Running,
         sender: Some(s_emacs),
         server_data: Arc::new(Mutex::new(LspServerData::new())),
         exit: Arc::new(AtomicBool::new(false)),
@@ -160,6 +160,7 @@ fn mock_server() -> (LspServer, Receiver<Message>, Sender<Message>) {
     };
     (server, r_lsp, s_lsp)
 }
+
 #[cfg(test)]
 mod test_lspserver_shutdown_with_mock {
     use super::*;
@@ -189,7 +190,7 @@ mod test_lspserver_shutdown_with_mock {
         // test shutdown logic and assert that shutdown protocol succeeded.
         let res = server.shutdown(shutdown_req, TWO_SECS);
         assert!(res.is_ok(), "Shutdown should succeed vs {:?}", res);
-        assert_eq!(server.status, SERVER_STATUS_EXITING, "Server status should be EXITING");
+        assert_eq!(server.status, ServerStatus::Exiting, "Server status should be EXITING");
 
         lsp_thread.join().expect("LSP thread panicked");
     }
@@ -205,7 +206,7 @@ mod test_lspserver_shutdown_with_mock {
             matches!(result, Err(ref e) if e.downcast_ref::<io::Error>().unwrap().kind() == io::ErrorKind::TimedOut),
             "Shutdown should return Timeout error"
         );
-        assert_eq!(server.status, SERVER_STATUS_SHUTTTING_DOWN, "Server status should remain SHUTTING_DOWN");
+        assert_eq!(server.status, ServerStatus::ShuttingDown, "Server status should remain SHUTTING_DOWN");
     }
 
     #[test]
@@ -219,6 +220,6 @@ mod test_lspserver_shutdown_with_mock {
             matches!(result, Err(ref e) if e.downcast_ref::<crossbeam_channel::SendError<Message>>().is_some()),
             "Shutdown should return channel error"
         );
-        assert_eq!(server.status, SERVER_STATUS_SHUTTTING_DOWN, "Server status should remain SHUTTING_DOWN");
+        assert_eq!(server.status, ServerStatus::ShuttingDown, "Server status should remain SHUTTING_DOWN");
     }
 }
