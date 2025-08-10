@@ -1,3 +1,5 @@
+#![allow(unused)]
+
 use lspce_module::test_utils::*;
 use lspce_module::{logger, shutdown_server, LspServer, Request, ResourceState, ThreadResult};
 use std::{io, time::Duration};
@@ -82,6 +84,12 @@ fn start_and_initialize_server(_id: &mut i32, args: &str) -> LspServer {
 }
 
 fn assert_thread_states(state: &ResourceState, expected: [Vec<ThreadResult>; 3]) {
+    // - LSP<(STDIN) / LSPCE WRITER should exit on
+    //   - normal exit with either flag or due to channel close, depends on thread timing.
+    //   - abnormal exit due to channel close.
+    // - LSP>(STDOUT) / LSPCE READER shoudl exit on EOF, since it's blocked on reading from LSP.
+    // - LSP!/STDERR should either exit with OK (exit flag), or EOF (blocking read), depends on timing
+
     const THREAD_NAMES: [&str; 3] = ["LSP< Writer", "LSP> Reader", "LSP! Stderr"];
     for (i, (actual, allowed)) in state.transport.iter().zip(expected.iter()).enumerate() {
         let mut matched = false;
@@ -129,53 +137,65 @@ fn ok_or_disconnect() -> Vec<ThreadResult> {
     vec![thread_res_io_err(io::ErrorKind::NotConnected), ThreadResult::Ok]
 }
 
+/// Tests normal graceful shutdown of LSP server, e.g. shutdown request, followed by exit notification and actual exit.
 #[test]
 fn test_graceful_shutdown() {
     let mut id = 5;
-    let exit_val = 5;
+    let exit_val = id;
 
     let mut server = start_and_initialize_server(&mut id, &format!("--exit-value {}", exit_val));
     let shutdown_req = make_request(&mut id, "shutdown", serde_json::Value::Null);
     let exit_status = shutdown_server(&mut server, shutdown_req, Some(ONE_SEC));
 
-    // LSP<(STDIN) / LSPCE WRITER shoudl exit on flag or channel close, depends on thread timing
-    // LSP>(STDOUT) / LSPCE READER shoudl exit on EOF, since it's blocked on reading from LSP.
-    // LSP!/STDERR should either exit with OK (exit flag), or EOF (blocking read), depends on timing
     assert_thread_states(&server.resources.state, [ok_or_disconnect(), eof(), ok_or_eof()]);
-    assert_exit_status(exit_status.unwrap(), ExitType::Code(exit_val)); // exit status should be OK(...)
+    assert_exit_status(exit_status.unwrap(), ExitType::Code(exit_val));
 }
 
-// Tests failures in shutdown protocol.
-// Ask dummy server to ignore shutdown message and stay alive.
-// This simulates any error that will result in stalled LSP which should be killed.
+/// Tests both failure in shutdown protocol and stalled LSP server cases, which should lead to forced shutdown.
 #[test]
 fn test_graceful_shutdown_escalated_to_forced() {
     let mut id = 10;
+    setup_test_logger();
 
-    let mut server = start_and_initialize_server(&mut id, "--ignore-shutdown");
+    let mut server = start_and_initialize_server(&mut id, "--stall-on-shutdown");
     let shutdown_req = make_request(&mut id, "shutdown", serde_json::Value::Null);
     let exit_status = shutdown_server(&mut server, shutdown_req, Some(ONE_SEC));
 
-    // LSP<(STDIN) / LSPCE WRITER shoudl exit due to disconnected channel from main thread
-    // LSP>(STDOUT) / LSPCE READER shoudl exit on EOF, since it's blocked on reading from LSP.
-    // LSP!/STDERR should either exit wither with OK (exit flag) or EOF (blocking read), depends on timing
     assert_thread_states(&server.resources.state, [disconnect(), eof(), ok_or_eof()]);
-    assert_exit_status(exit_status.unwrap(), ExitType::Signal(9)); // exit status should be OK(...)
+    assert_exit_status(exit_status.unwrap(), ExitType::Signal(9));
 }
 
-// Although previous test actually tests the same, let's ensure what will happen without shutdown sequence at all.
+/// Tests abnormal voluntary exit of LSP
 #[test]
-fn test_shutdown_stalled() {
-    setup_test_logger();
+fn test_volunary_exited_lsp() {
     let mut id = 15;
+    let exit_val = id;
 
-    let mut server = start_and_initialize_server(&mut id, "--ignore-shutdown");
+    let mut server = start_and_initialize_server(&mut id, &format!("--exit-on-shutdown --exit-value {}", exit_val));
     let shutdown_req = make_request(&mut id, "shutdown", serde_json::Value::Null);
-    let exit_status = shutdown_server(&mut server, shutdown_req, Some(Duration::from_millis(10)));
+    let exit_status = shutdown_server(&mut server, shutdown_req, Some(ONE_SEC));
 
-    // LSP<(STDIN) / LSPCE WRITER shoudl exit due to disconnectd channel from main thread
-    // LSP>(STDOUT) / LSPCE READER shoudl exit on EOF, since it's blocked on reading from LSP.
-    // LSP!/STDERR should either exit with EOF (blocking read) or with OK(exit flag), depends on timing.
-    assert_thread_states(&server.resources.state, [disconnect(), eof(), ok_or_eof()]);
-    assert_exit_status(exit_status.unwrap(), ExitType::Signal(9)); // exit status should be OK(...)
+    assert_thread_states(&server.resources.state, [ok_or_disconnect(), eof(), ok_or_eof()]);
+    assert_exit_status(exit_status.unwrap(), ExitType::Code(exit_val));
 }
+
+#[test]
+fn test_aborted_lsp() {
+    let mut id = 15;
+    let exit_val = id;
+
+    let mut server = start_and_initialize_server(&mut id, &format!("--abort-on-shutdown"));
+    let shutdown_req = make_request(&mut id, "shutdown", serde_json::Value::Null);
+    let exit_status = shutdown_server(&mut server, shutdown_req, Some(ONE_SEC));
+
+    assert_thread_states(&server.resources.state, [ok_or_disconnect(), eof(), ok_or_eof()]);
+    #[cfg(unix)]
+    {
+        const SIGABRT: i32 = 6;
+        assert_exit_status(exit_status.unwrap(), ExitType::Signal(SIGABRT));
+    }
+}
+
+// FIXME: check closure of stdin/or stdout?
+// FIXME: text crash/kill ?
+// FIXME: stalled, e.g. not reading any messages? just in busy wait loop/sleep?
