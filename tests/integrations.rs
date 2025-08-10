@@ -117,24 +117,20 @@ fn thread_res_io_err(kind: io::ErrorKind) -> ThreadResult {
     ThreadResult::IoError(io::Error::from(kind))
 }
 
-fn ok() -> Vec<ThreadResult> {
-    vec![ThreadResult::Ok]
+fn normal_exit_thread_states() -> [Vec<ThreadResult>; 3] {
+    [
+        vec![ThreadResult::Ok, thread_res_io_err(io::ErrorKind::NotConnected)],
+        vec![thread_res_io_err(io::ErrorKind::UnexpectedEof)],
+        vec![ThreadResult::Ok, thread_res_io_err(io::ErrorKind::UnexpectedEof)],
+    ]
 }
 
-fn eof() -> Vec<ThreadResult> {
-    vec![thread_res_io_err(io::ErrorKind::UnexpectedEof)]
-}
-
-fn disconnect() -> Vec<ThreadResult> {
-    vec![thread_res_io_err(io::ErrorKind::NotConnected)]
-}
-
-fn ok_or_eof() -> Vec<ThreadResult> {
-    vec![thread_res_io_err(io::ErrorKind::UnexpectedEof), ThreadResult::Ok]
-}
-
-fn ok_or_disconnect() -> Vec<ThreadResult> {
-    vec![thread_res_io_err(io::ErrorKind::NotConnected), ThreadResult::Ok]
+fn abnormal_exit_thread_states() -> [Vec<ThreadResult>; 3] {
+    [
+        vec![thread_res_io_err(io::ErrorKind::NotConnected)],
+        vec![thread_res_io_err(io::ErrorKind::UnexpectedEof)],
+        vec![ThreadResult::Ok, thread_res_io_err(io::ErrorKind::UnexpectedEof)],
+    ]
 }
 
 /// Tests normal graceful shutdown of LSP server, e.g. shutdown request, followed by exit notification and actual exit.
@@ -147,7 +143,7 @@ fn test_graceful_shutdown() {
     let shutdown_req = make_request(&mut id, "shutdown", serde_json::Value::Null);
     let exit_status = shutdown_server(&mut server, shutdown_req, Some(ONE_SEC));
 
-    assert_thread_states(&server.resources.state, [ok_or_disconnect(), eof(), ok_or_eof()]);
+    assert_thread_states(&server.resources.state, normal_exit_thread_states());
     assert_exit_status(exit_status.unwrap(), ExitType::Code(exit_val));
 }
 
@@ -161,7 +157,7 @@ fn test_graceful_shutdown_escalated_to_forced() {
     let shutdown_req = make_request(&mut id, "shutdown", serde_json::Value::Null);
     let exit_status = shutdown_server(&mut server, shutdown_req, Some(ONE_SEC));
 
-    assert_thread_states(&server.resources.state, [disconnect(), eof(), ok_or_eof()]);
+    assert_thread_states(&server.resources.state, abnormal_exit_thread_states());
     assert_exit_status(exit_status.unwrap(), ExitType::Signal(9));
 }
 
@@ -175,27 +171,28 @@ fn test_volunary_exited_lsp() {
     let shutdown_req = make_request(&mut id, "shutdown", serde_json::Value::Null);
     let exit_status = shutdown_server(&mut server, shutdown_req, Some(ONE_SEC));
 
-    assert_thread_states(&server.resources.state, [ok_or_disconnect(), eof(), ok_or_eof()]);
+    assert_thread_states(&server.resources.state, abnormal_exit_thread_states());
     assert_exit_status(exit_status.unwrap(), ExitType::Code(exit_val));
 }
 
+// Test ABORTed LSP.
+// Note that as skip testing killed LSP. Testing it here adds no additional value vs. the simple test done in `tests.rs`
+// and requires to expose child process in Resources as well.
 #[test]
 fn test_aborted_lsp() {
-    let mut id = 15;
-    let exit_val = id;
+    let mut id = 20;
 
     let mut server = start_and_initialize_server(&mut id, &format!("--abort-on-shutdown"));
     let shutdown_req = make_request(&mut id, "shutdown", serde_json::Value::Null);
     let exit_status = shutdown_server(&mut server, shutdown_req, Some(ONE_SEC));
 
-    assert_thread_states(&server.resources.state, [ok_or_disconnect(), eof(), ok_or_eof()]);
+    assert_thread_states(&server.resources.state, abnormal_exit_thread_states());
     #[cfg(unix)]
     {
         const SIGABRT: i32 = 6;
         assert_exit_status(exit_status.unwrap(), ExitType::Signal(SIGABRT));
     }
+    // FIXME: reaper?
 }
 
 // FIXME: check closure of stdin/or stdout?
-// FIXME: text crash/kill ?
-// FIXME: stalled, e.g. not reading any messages? just in busy wait loop/sleep?
