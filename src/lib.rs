@@ -753,13 +753,18 @@ fn connect(
     let prj_name_type = format!("{}({})", root_uri, lsp_type);
     Logger::info(format!("Creating and initializing LSP server for {}", prj_name_type));
 
-    let mut projects_guard = projects().lock().unwrap();
-
-    if let Some(p) = projects_guard.get(&root_uri) {
-        if let Some(Some(s)) = p.servers.get(&lsp_type) {
-            Logger::info(format!("Using existing LSP server {}", prj_name_type));
-            return Ok(Some(serde_json::to_string(&s.server_info).context("failed to serialize server info")?));
+    let existing_server_info = with_projects_mut(|projects| {
+        if let Some(prj) = projects.get(&root_uri) {
+            if let Some(Some(server)) = prj.servers.get(&lsp_type) {
+                return Some(server.server_info.clone());
+            }
         }
+        None
+    });
+
+    if let Some(server_info) = existing_server_info {
+        Logger::info(format!("Using existing LSP server {}", prj_name_type));
+        return Ok(Some(serde_json::to_string(&server_info).context("failed to serialize server info")?));
     }
 
     let mut server = LspServer::new(&cmd, &cmd_args, &emacs_envs)
@@ -774,7 +779,10 @@ fn connect(
         .with_context(|| format!("Failed to initialize LSP server for {}", prj_name_type))?;
 
     let server_info = server.server_info.clone();
-    projects_guard.add_server(root_uri, lsp_type, server);
+
+    with_projects_mut(|projects| {
+        projects.add_server(root_uri, lsp_type, server);
+    });
 
     Logger::info(format!("Connected to server successfully. server capabilities {}", &server_info.capabilities));
     Ok(Some(serde_json::to_string(&server_info)?))
