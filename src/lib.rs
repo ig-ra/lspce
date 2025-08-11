@@ -552,6 +552,14 @@ fn projects() -> &'static Arc<Mutex<Projects>> {
     &PROJECTS
 }
 
+fn with_projects_mut<F, R>(f: F) -> R
+where
+    F: FnOnce(&mut Projects) -> R,
+{
+    let mut projects_guard = projects().lock().unwrap();
+    f(&mut projects_guard)
+}
+
 ///
 /// This function iterates through all servers and, upon finding a dead one, takes
 /// ownership of it. This leaves `None` in its place in the map and immediately
@@ -560,22 +568,22 @@ fn projects() -> &'static Arc<Mutex<Projects>> {
 /// A server is considered dead if its dispatcher thread has terminated or its exit
 /// flag has been set due to an I/O error.
 pub fn reap_dead_servers_once() {
-    let mut projects = projects().lock().unwrap();
+    with_projects_mut(|projects| {
+        for project in projects.values_mut() {
+            for server_option in project.servers.values_mut() {
+                if let Some(server) = server_option {
+                    let exit_requested = server.exit.load(Ordering::Relaxed);
+                    let dispatcher_finished = server.resources.dispatcher.as_ref().map_or(true, |h| h.is_finished());
 
-    for project in projects.values_mut() {
-        for server_option in project.servers.values_mut() {
-            if let Some(server) = server_option {
-                let exit_requested = server.exit.load(Ordering::Relaxed);
-                let dispatcher_finished = server.resources.dispatcher.as_ref().map_or(true, |h| h.is_finished());
-
-                if exit_requested || dispatcher_finished {
-                    Logger::info(format!("Reaper detected dead server: {}. Dropping", server.name_id));
-                    // Take ownership, causing server to be dropped, which will trigger teardown logic
-                    let _ = server_option.take();
+                    if exit_requested || dispatcher_finished {
+                        Logger::info(format!("Reaper detected dead server: {}. Dropping", server.name_id));
+                        // Take ownership, causing server to be dropped, which will trigger teardown logic
+                        let _ = server_option.take();
+                    }
                 }
             }
         }
-    }
+    })
 }
 
 /// A background thread that periodically checks for and cleans up dead LSP servers.
@@ -689,15 +697,16 @@ fn with_project<F, T>(env: &Env, root_uri: &str, caller_loc: Option<&Location<'s
 where
     F: FnOnce(&mut Project) -> EmacsResult<Option<T>>,
 {
-    let mut projects_guard = projects().lock().unwrap();
-    let caller = Some(caller_loc.unwrap_or_else(|| Location::caller()));
+    with_projects_mut(|projects| {
+        let caller = Some(caller_loc.unwrap_or_else(|| Location::caller()));
 
-    match projects_guard.get_mut(root_uri) {
-        Some(project) => f(project),
-        None => {
-            env_message_and_bail!(env, @ caller, "no project found for '{}'", root_uri)
+        match projects.get_mut(root_uri) {
+            Some(project) => f(project),
+            None => {
+                env_message_and_bail!(env, @ caller, "no project found for '{}'", root_uri)
+            }
         }
-    }
+    })
 }
 
 #[track_caller]
