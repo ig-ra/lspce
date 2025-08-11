@@ -76,6 +76,10 @@ impl LspServerInfo {
     pub fn new(id: u32) -> LspServerInfo {
         LspServerInfo { name: String::new(), version: String::new(), id: id.to_string(), capabilities: String::new() }
     }
+
+    pub fn to_json_string(&self) -> EmacsResult<String> {
+        serde_json::to_string(self).context("Failed to serialize server info")
+    }
 }
 
 #[atomic_enum]
@@ -766,7 +770,7 @@ fn connect(
 
     if let Some(server_info) = existing_server_info {
         Logger::info(format!("Using existing LSP server {}", prj_name_type));
-        return Ok(Some(serde_json::to_string(&server_info).context("failed to serialize server info")?));
+        return Ok(Some(server_info.to_json_string()?));
     }
 
     let mut server = LspServer::new(&cmd, &cmd_args, &emacs_envs)
@@ -787,7 +791,7 @@ fn connect(
     });
 
     Logger::info(format!("Connected to server successfully. server capabilities {}", &server_info.capabilities));
-    Ok(Some(serde_json::to_string(&server_info)?))
+    Ok(Some(server_info.to_json_string()?))
 }
 
 pub fn initialize(env: &Env, server: &mut LspServer, req: Request, timeout: Duration) -> EmacsResult<()> {
@@ -878,12 +882,8 @@ fn shutdown(env: &Env, root_uri: String, file_type: String, request: String) -> 
 #[defun]
 fn server(env: &Env, root_uri: String, file_type: String) -> EmacsResult<Option<String>> {
     with_project_and_env(env, &root_uri, None, |project| match project.servers.get(&file_type) {
-        Some(Some(server)) => {
-            Ok(Some(serde_json::to_string(&server.server_info).context("failed to serialize server info")?))
-        }
-        _ => {
-            env_message_and_bail!(env, "No {} server found in project '{}'", file_type, root_uri)
-        }
+        Some(Some(server)) => Ok(Some(server.server_info.to_json_string()?)),
+        _ => env_message_and_bail!(env, "No {} server found in project '{}'", file_type, root_uri),
     })
 }
 
