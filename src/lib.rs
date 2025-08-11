@@ -34,6 +34,7 @@ use std::{
     collections::{HashMap, VecDeque},
     fmt::Debug,
     io::{self, Read, Write},
+    ops::{Deref, DerefMut},
     process::{Child, Command, ExitStatus, Stdio},
     sync::atomic::{AtomicBool, AtomicI32, Ordering},
     sync::{Arc, LazyLock, Mutex},
@@ -508,7 +509,7 @@ impl Drop for LspServer {
     }
 }
 
-struct Project {
+pub struct Project {
     pub root_uri: String, // root URI of the project, e.g. "file:///home/user/project"
     pub servers: HashMap<String, Option<LspServer>>, // map each language_id to a lsp server
 }
@@ -518,10 +519,36 @@ impl Project {
         Project { root_uri, servers: HashMap::new() }
     }
 }
-static PROJECTS: LazyLock<Arc<Mutex<HashMap<String, Project>>>> =
-    LazyLock::new(|| Arc::new(Mutex::new(HashMap::new())));
 
-fn projects() -> &'static Arc<Mutex<HashMap<String, Project>>> {
+pub struct Projects(pub HashMap<String, Project>);
+
+impl Projects {
+    pub fn new() -> Self {
+        Projects(HashMap::new())
+    }
+
+    pub fn add_server(&mut self, root_uri: String, lsp_type: String, server: LspServer) {
+        let prj = self.0.entry(root_uri.clone()).or_insert_with(|| Project::new(root_uri));
+        prj.servers.insert(lsp_type, Some(server));
+    }
+}
+
+impl Deref for Projects {
+    type Target = HashMap<String, Project>;
+    fn deref(&self) -> &Self::Target {
+        &self.0
+    }
+}
+
+impl DerefMut for Projects {
+    fn deref_mut(&mut self) -> &mut Self::Target {
+        &mut self.0
+    }
+}
+
+static PROJECTS: LazyLock<Arc<Mutex<Projects>>> = LazyLock::new(|| Arc::new(Mutex::new(Projects::new())));
+
+fn projects() -> &'static Arc<Mutex<Projects>> {
     &PROJECTS
 }
 
@@ -713,9 +740,9 @@ fn connect(
     let prj_name_type = format!("{}({})", root_uri, lsp_type);
     Logger::info(format!("Creating and initializing LSP server for {}", prj_name_type));
 
-    let mut projects = projects().lock().unwrap();
+    let mut projects_guard = projects().lock().unwrap();
 
-    if let Some(p) = projects.get(&root_uri) {
+    if let Some(p) = projects_guard.get(&root_uri) {
         if let Some(Some(s)) = p.servers.get(&lsp_type) {
             Logger::info(format!("Using existing LSP server {}", prj_name_type));
             return Ok(Some(serde_json::to_string(&s.server_info).context("failed to serialize server info")?));
@@ -734,9 +761,7 @@ fn connect(
         .with_context(|| format!("Failed to initialize LSP server for {}", prj_name_type))?;
 
     let server_info = server.server_info.clone();
-
-    let project = projects.entry(root_uri.clone()).or_insert_with(|| Project::new(root_uri));
-    project.servers.insert(lsp_type, Some(server));
+    projects_guard.add_server(root_uri, lsp_type, server);
 
     Logger::info(format!("Connected to server successfully. server capabilities {}", &server_info.capabilities));
     Ok(Some(serde_json::to_string(&server_info)?))
@@ -787,13 +812,14 @@ pub fn initialize(env: &Env, server: &mut LspServer, req: Request, timeout: Dura
 ///
 /// # Arguments
 /// * `server` - The `LspServer` instance to shut down.
-/// * `req` - The `shutdown` request to send to the server.
+/// * `req` - The `shutdown` request to be sent to the server.
 /// * `timeout` - Timeout to complete gracefull shutdown process
 ///
 pub fn shutdown_server(
     server: &mut LspServer, req: Request, timeout: Option<Duration>,
 ) -> EmacsResult<Option<ExitStatus>> {
     let mut timeout = timeout.unwrap_or(GRACEFUL_SHUTDOWN_TIMEOUT);
+
     let start_time = Instant::now();
     let shutdown_proto_res = server.shutdown(req, timeout);
     let elapsed = start_time.elapsed();
