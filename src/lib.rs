@@ -552,33 +552,37 @@ fn projects() -> &'static Arc<Mutex<Projects>> {
     &PROJECTS
 }
 
-/// A background thread that periodically checks for and cleans up dead LSP servers.
-///
-/// A server is considered dead if its dispatcher thread has terminated or its exit
-/// flag has been set due to an I/O error.
 ///
 /// This function iterates through all servers and, upon finding a dead one, takes
 /// ownership of it. This leaves `None` in its place in the map and immediately
 /// triggers the `LspServer::drop` implementation, which ensures resource teardown.
-fn reap_dead_servers() {
-    loop {
-        thread::sleep(REAPER_INTERVAL);
-        let mut projects = projects().lock().unwrap();
+///
+/// A server is considered dead if its dispatcher thread has terminated or its exit
+/// flag has been set due to an I/O error.
+pub fn reap_dead_servers_once() {
+    let mut projects = projects().lock().unwrap();
 
-        for project in projects.values_mut() {
-            for server_option in project.servers.values_mut() {
-                if let Some(server) = server_option {
-                    let exit_requested = server.exit.load(Ordering::Relaxed);
-                    let dispatcher_finished = server.resources.dispatcher.as_ref().map_or(true, |h| h.is_finished());
+    for project in projects.values_mut() {
+        for server_option in project.servers.values_mut() {
+            if let Some(server) = server_option {
+                let exit_requested = server.exit.load(Ordering::Relaxed);
+                let dispatcher_finished = server.resources.dispatcher.as_ref().map_or(true, |h| h.is_finished());
 
-                    if exit_requested || dispatcher_finished {
-                        Logger::info(format!("Reaper detected dead server: {}. Dropping", server.name_id));
-                        // Take ownership, causing server to be dropped, which will trigger teardown logic
-                        let _ = server_option.take();
-                    }
+                if exit_requested || dispatcher_finished {
+                    Logger::info(format!("Reaper detected dead server: {}. Dropping", server.name_id));
+                    // Take ownership, causing server to be dropped, which will trigger teardown logic
+                    let _ = server_option.take();
                 }
             }
         }
+    }
+}
+
+/// A background thread that periodically checks for and cleans up dead LSP servers.
+fn reap_dead_servers() {
+    loop {
+        thread::sleep(REAPER_INTERVAL);
+        reap_dead_servers_once();
     }
 }
 
