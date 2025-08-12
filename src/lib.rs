@@ -2,9 +2,11 @@
 
 mod bufext;
 mod connection;
+mod env;
 mod errors;
 pub mod logger;
 mod msg;
+mod safe_call;
 mod socket;
 mod stdio;
 mod utils;
@@ -43,10 +45,12 @@ use std::{
     time::{Duration, Instant},
 };
 
+use env::{EnvExt, UserMsgEnv};
 use errors::UserFacing;
 use logger::Logger;
 use lspce_macros::defun_safe;
 pub use msg::{Message, Notification, Request, RequestId, Response};
+use safe_call::safe_call;
 use stdio::IoThreads;
 pub use stdio::ThreadResult;
 use utils::*;
@@ -611,16 +615,6 @@ fn reap_dead_servers() {
 #[cfg(not(test))]
 emacs::plugin_is_GPL_compatible!();
 
-trait EnvExt {
-    fn lspce_message(&self, text: impl AsRef<str>) -> EmacsResult<Value<'_>>;
-}
-
-impl EnvExt for Env {
-    fn lspce_message(&self, text: impl AsRef<str>) -> EmacsResult<Value<'_>> {
-        self.message(format!("[lspce-module] {}", text.as_ref()))
-    }
-}
-
 use std::sync::Once;
 static INIT: Once = Once::new();
 
@@ -685,26 +679,6 @@ fn set_log_file(env: &Env, file: String) -> EmacsResult<Value<'_>> {
     env.lspce_message(message)
 }
 
-macro_rules! env_message_and_bail {
-    ($env:expr, @ $location:expr, $($arg:tt)*) => {
-        env_message_and_bail!($env, loc: $location, $($arg)*)
-    };
-
-    ($env:expr, loc: $location:expr, $($arg:tt)*) => {{
-        let msg = format!($($arg)*);
-        let _ = $env.lspce_message(&msg);
-        let bail_msg = match $location {
-            None => msg,
-            Some(loc) => format!("{}. @{}", msg, loc),
-        };
-        anyhow::bail!(bail_msg)
-    }};
-
-    ($env:expr, $($arg:tt)*) => {
-        env_message_and_bail!($env, loc: None::<&std::panic::Location>, $($arg)*)
-    };
-}
-
 fn with_project<F, T>(root_uri: &str, f: F) -> EmacsResult<Option<T>>
 where
     F: FnOnce(&mut Project) -> EmacsResult<Option<T>>,
@@ -729,37 +703,6 @@ where
         }
         _ => Err(anyhow::anyhow!("No LSP server for {}({})", root_uri, file_type).context(UserFacing)),
     })
-}
-
-// Trait for safe_call to use + mocking. Send message throught emacs env back to user
-trait UserMsgEnv {
-    fn user_message(&self, text: &str);
-}
-
-impl UserMsgEnv for Env {
-    fn user_message(&self, text: &str) {
-        let _ = self.lspce_message(text);
-    }
-}
-
-/// Executes a closure `f` and converts Err result.
-/// On error, logs (optionally send a user message is Error is tagged as UserFacing) and return `Ok(None)`.
-#[track_caller]
-fn safe_call<T, F>(env: &dyn UserMsgEnv, f: F) -> EmacsResult<Option<T>>
-where
-    F: FnOnce() -> EmacsResult<Option<T>>, // Result<T> is result::Result<T, anyhow::Error>
-{
-    match f() {
-        ok @ Ok(_) => ok,
-        Err(e) => {
-            // User-facing error. Extract the root cause message and send to Emacs
-            if e.downcast_ref::<UserFacing>().is_some() {
-                env.user_message(&e.root_cause().to_string());
-            }
-            Logger::error(format!("Error: @{}: {}", Location::caller(), e));
-            Ok(None)
-        }
-    }
 }
 
 /// Connect to an existing server or create a server subprocess and then connect to it.

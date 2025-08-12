@@ -65,7 +65,7 @@ impl MockEnv {
     }
 }
 
-impl crate::UserMsgEnv for MockEnv {
+impl crate::env::UserMsgEnv for MockEnv {
     fn user_message(&self, text: &str) {
         self.messages.lock().unwrap().push(text.to_string());
     }

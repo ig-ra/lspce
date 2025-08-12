@@ -2,8 +2,10 @@ use super::*;
 
 #[cfg(test)]
 mod test_safe_call {
-    use super::{safe_call, EmacsResult, UserFacing};
+    use crate::safe_call::safe_call;
+    use crate::errors::UserFacing;
     use crate::test_utils::MockEnv;
+    use emacs::Result as EmacsResult;
     use anyhow::{bail, Context};
 
     #[test]
