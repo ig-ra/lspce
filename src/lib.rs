@@ -716,14 +716,16 @@ where
 }
 
 #[track_caller]
-fn with_server_and_env<F, T>(env: &Env, root_uri: &str, file_type: &str, f: F) -> EmacsResult<Option<T>>
+fn with_server_and_env<F, T>(
+    env: &Env, root_uri: &str, file_type: &str, require_running: bool, f: F,
+) -> EmacsResult<Option<T>>
 where
     F: FnOnce(&mut LspServer) -> EmacsResult<Option<T>>,
 {
     let caller = Some(Location::caller());
     with_project_and_env(env, root_uri, caller, |project| match project.servers.get_mut(file_type) {
         Some(Some(server)) => {
-            if server.status() != ServerStatus::Running {
+            if require_running && server.status() != ServerStatus::Running {
                 env_message_and_bail!(env, @ caller, "LSP server for {}({}) is not ready", root_uri, file_type)
             }
             f(server)
@@ -881,10 +883,7 @@ fn shutdown(env: &Env, root_uri: String, file_type: String, request: String) -> 
 #[defun_safe]
 #[defun]
 fn server(env: &Env, root_uri: String, file_type: String) -> EmacsResult<Option<String>> {
-    with_project_and_env(env, &root_uri, None, |project| match project.servers.get(&file_type) {
-        Some(Some(server)) => Ok(Some(server.server_info.to_json_string()?)),
-        _ => env_message_and_bail!(env, "No {} server found in project '{}'", file_type, root_uri),
-    })
+    with_server_and_env(env, &root_uri, &file_type, false, |server| Ok(Some(server.server_info.to_json_string()?)))
 }
 
 fn _request_async(server: &mut LspServer, req: Request) -> EmacsResult<Option<bool>> {
@@ -910,7 +909,7 @@ fn _request_async(server: &mut LspServer, req: Request) -> EmacsResult<Option<bo
 #[defun_safe]
 #[defun]
 fn request_async(env: &Env, root_uri: String, file_type: String, json: String) -> EmacsResult<Option<bool>> {
-    with_server_and_env(env, &root_uri, &file_type, |server| {
+    with_server_and_env(env, &root_uri, &file_type, true, |server| {
         Logger::trace(format!("request {}", &json));
         let msg = Message::from_str_typed::<Request>(&json).context("request_async")?;
         _request_async(server, msg)
@@ -920,7 +919,7 @@ fn request_async(env: &Env, root_uri: String, file_type: String, json: String) -
 #[defun_safe]
 #[defun]
 fn notify(env: &Env, root_uri: String, file_type: String, json: String) -> EmacsResult<Option<bool>> {
-    with_server_and_env(env, &root_uri, &file_type, |server| {
+    with_server_and_env(env, &root_uri, &file_type, true, |server| {
         Logger::trace(format!("notify {}", &json));
         let msg = Message::from_str_typed::<Notification>(&json).context("notify")?;
         server.write(msg)?;
@@ -934,7 +933,7 @@ fn notify(env: &Env, root_uri: String, file_type: String, json: String) -> Emacs
 fn read_response_exact(
     env: &Env, root_uri: String, file_type: String, id: String, method: String,
 ) -> EmacsResult<Option<String>> {
-    with_server_and_env(env, &root_uri, &file_type, |server| {
+    with_server_and_env(env, &root_uri, &file_type, true, |server| {
         Ok(server.read_response_exact(RequestId::from(id), method).map(|r| r.into_string()))
     })
 }
@@ -942,13 +941,15 @@ fn read_response_exact(
 #[defun_safe]
 #[defun]
 fn read_notification(env: &Env, root_uri: String, file_type: String) -> EmacsResult<Option<String>> {
-    with_server_and_env(env, &root_uri, &file_type, |server| Ok(server.read_notification().map(|r| r.into_string())))
+    with_server_and_env(env, &root_uri, &file_type, true, |server| {
+        Ok(server.read_notification().map(|r| r.into_string()))
+    })
 }
 
 #[defun_safe]
 #[defun]
 fn read_file_diagnostics(env: &Env, root_uri: String, file_type: String, uri: String) -> EmacsResult<Option<String>> {
-    with_server_and_env(env, &root_uri, &file_type, |server| {
+    with_server_and_env(env, &root_uri, &file_type, true, |server| {
         let mut server_data = server.server_data.lock().unwrap();
         Ok(server_data
             .file_infos
@@ -961,11 +962,13 @@ fn read_file_diagnostics(env: &Env, root_uri: String, file_type: String, uri: St
 #[defun_safe]
 #[defun]
 fn read_latest_response_id(env: &Env, root_uri: String, file_type: String) -> EmacsResult<Option<String>> {
-    with_server_and_env(env, &root_uri, &file_type, |server| Ok(Some(server.get_latest_response_id().to_string())))
+    with_server_and_env(env, &root_uri, &file_type, true, |server| {
+        Ok(Some(server.get_latest_response_id().to_string()))
+    })
 }
 
 #[defun_safe]
 #[defun]
 fn read_latest_response_tick(env: &Env, root_uri: String, file_type: String) -> EmacsResult<Option<String>> {
-    with_server_and_env(env, &root_uri, &file_type, |server| Ok(Some(server.get_latest_response_tick())))
+    with_server_and_env(env, &root_uri, &file_type, true, |server| Ok(Some(server.get_latest_response_tick())))
 }
