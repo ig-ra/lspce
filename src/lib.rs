@@ -238,7 +238,7 @@ where
 {
     match with_project_mut(root_uri, f) {
         Some(result) => result,
-        None => Err(anyhow::anyhow!("No project found for '{}'", root_uri).context(UserFacing)),
+        None => Err(anyhow!("No project found for '{}'", root_uri).context(UserFacing)),
     }
 }
 
@@ -249,12 +249,12 @@ where
     with_project(root_uri, |project| match project.servers.get_mut(file_type) {
         Some(Some(server)) => {
             if require_running && server.status() != ServerStatus::Running {
-                Err(anyhow::anyhow!("LSP server for {}({}) is not ready", root_uri, file_type).context(UserFacing))
+                Err(anyhow!("LSP server for {}({}) is not ready", root_uri, file_type).context(UserFacing))
             } else {
                 f(server)
             }
         }
-        _ => Err(anyhow::anyhow!("No LSP server for {}({})", root_uri, file_type).context(UserFacing)),
+        _ => Err(anyhow!("No LSP server for {}({})", root_uri, file_type).context(UserFacing)),
     })
 }
 
