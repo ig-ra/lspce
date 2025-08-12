@@ -278,8 +278,8 @@ fn connect(
     let mut server = LspServer::new(&cmd, &cmd_args, &emacs_envs)
         .with_context(|| format!("Failed to create LSP server for {}, <{} {}>", prj_name_type, cmd, cmd_args))?;
 
-    Logger::debug(format!("raw initialize request {:#?}", initialize_req_str));
-    let req = Message::from_str_typed::<Request>(&initialize_req_str).context("initialize")?;
+    Logger::debug(format!("API: Initialize Request {:#?}", initialize_req_str));
+    let req = Message::from_str_typed::<Request>(&initialize_req_str)?;
     initialize(env, &mut server, req, Duration::from_secs(timeout.max(0) as u64))
         .inspect_err(|_| {
             let _ = server.teardown(Duration::ZERO); // forcibly kill server and join threads
@@ -297,7 +297,6 @@ fn connect(
 }
 
 pub fn initialize(env: &Env, server: &mut LspServer, req: Request, timeout: Duration) -> EmacsResult<()> {
-    Logger::info(format!("initialize request {}", &req));
     server.request_async(req)?;
 
     let start_time = Instant::now();
@@ -307,13 +306,9 @@ pub fn initialize(env: &Env, server: &mut LspServer, req: Request, timeout: Dura
                 bail!("LSP error: {:?}", error);
             }
 
-            // FIXME: why do we need pretty? what do we do after?
-            Logger::info(format!("initialize response {}", &response));
-
             let ir: InitializeResult = serde_json::from_value(response.result.context("Empty initialize response")?)?;
 
-            let initialized = Notification::new("initialized", InitializedParams {})?;
-            server.write(initialized)?;
+            server.write(Notification::new("initialized", InitializedParams {})?)?;
 
             server.server_info.capabilities = serde_json::to_string(&ir.capabilities)?;
             if let Some(si) = ir.server_info {
@@ -389,7 +384,7 @@ fn server(env: &Env, root_uri: String, file_type: String) -> EmacsResult<Option<
 #[defun]
 fn request_async(env: &Env, root_uri: String, file_type: String, json: String) -> EmacsResult<Option<bool>> {
     with_server(&root_uri, &file_type, true, |server| {
-        Logger::trace(format!("request {}", &json));
+        Logger::trace(format!("API: Request {}", &json));
         let msg = Message::from_str_typed::<Request>(&json)?;
         server.request_async(msg)
     })
@@ -399,7 +394,7 @@ fn request_async(env: &Env, root_uri: String, file_type: String, json: String) -
 #[defun]
 fn notify(env: &Env, root_uri: String, file_type: String, json: String) -> EmacsResult<Option<bool>> {
     with_server(&root_uri, &file_type, true, |server| {
-        Logger::trace(format!("notify {}", &json));
+        Logger::trace(format!("API: Notify {}", &json));
         let msg = Message::from_str_typed::<Notification>(&json)?;
         server.write(msg)?;
         Ok(Some(true))
