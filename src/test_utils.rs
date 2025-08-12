@@ -45,3 +45,28 @@ where
     // Return the result from the function
     result
 }
+
+// Actual mock for testing (via safe_call) and observing messages
+pub struct MockEnv {
+    pub messages: Arc<Mutex<Vec<String>>>,
+}
+
+impl MockEnv {
+    pub fn new() -> Self {
+        Self { messages: Arc::new(Mutex::new(Vec::new())) }
+    }
+
+    pub fn get_messages(&self) -> Vec<String> {
+        self.messages.lock().unwrap().clone()
+    }
+
+    pub fn clear_messages(&self) {
+        self.messages.lock().unwrap().clear();
+    }
+}
+
+impl crate::UserMsgEnv for MockEnv {
+    fn user_message(&self, text: &str) {
+        self.messages.lock().unwrap().push(text.to_string());
+    }
+}

@@ -745,7 +745,7 @@ impl UserMsgEnv for Env {
 /// Executes a closure `f` and converts Err result.
 /// On error, logs (optionally send a user message is Error is tagged as UserFacing) and return `Ok(None)`.
 #[track_caller]
-fn safe_call<T, F>(env: &Env, f: F) -> EmacsResult<Option<T>>
+fn safe_call<T, F>(env: &dyn UserMsgEnv, f: F) -> EmacsResult<Option<T>>
 where
     F: FnOnce() -> EmacsResult<Option<T>>, // Result<T> is result::Result<T, anyhow::Error>
 {
@@ -754,7 +754,7 @@ where
         Err(e) => {
             // User-facing error. Extract the root cause message and send to Emacs
             if e.downcast_ref::<UserFacing>().is_some() {
-                let _ = env.lspce_message(e.root_cause().to_string());
+                env.user_message(&e.root_cause().to_string());
             }
             Logger::error(format!("Error: @{}: {}", Location::caller(), e));
             Ok(None)
