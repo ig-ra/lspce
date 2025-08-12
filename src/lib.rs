@@ -772,18 +772,11 @@ fn connect(
     let prj_name_type = format!("{}({})", root_uri, lsp_type);
     Logger::info(format!("Creating and initializing LSP server for {}", prj_name_type));
 
-    let existing_server_info = with_projects_mut(|projects| {
-        if let Some(prj) = projects.get(&root_uri) {
-            if let Some(Some(server)) = prj.servers.get(&lsp_type) {
-                return Some(server.server_info.clone());
-            }
-        }
-        None
-    });
-
-    if let Some(server_info) = existing_server_info {
+    if let Ok(Some(server_info_json)) =
+        with_server(&root_uri, &lsp_type, false, |server| Ok(Some(server.server_info.to_json_string()?)))
+    {
         Logger::info(format!("Using existing LSP server {}", prj_name_type));
-        return Ok(Some(server_info.to_json_string()?));
+        return Ok(Some(server_info_json));
     }
 
     let mut server = LspServer::new(&cmd, &cmd_args, &emacs_envs)
