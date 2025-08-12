@@ -3,20 +3,27 @@ use super::*;
 #[cfg(test)]
 mod test_safe_call {
     use super::{safe_call, EmacsResult};
+    use crate::test_utils::with_mock_env;
     use anyhow::bail;
 
     #[test]
     fn test_safe_call() {
-        // we will use unwarp, since safe_call should ALWAYS return OK(...). On Err it logs and return Ok(None)
+        // we will use unwrap, since safe_call should ALWAYS return OK(...). On Err it logs and return Ok(None)
 
-        // Case 1: OK(Some(true)) -> transarently pass -> OK(Some(true))
-        assert_eq!(safe_call(|| { Ok(Some(true)) }).unwrap(), Some(true), "case OK(Some(true))");
+        // Case 1: OK(Some(true)) -> transparently pass -> OK(Some(true))
+        with_mock_env(|env| {
+            assert_eq!(safe_call(env, || Ok(Some(true))).unwrap(), Some(true), "case OK(Some(true))");
+        });
 
         // Case 2: Ok(None) -> transparently pass -> Ok(None)
-        assert_eq!(safe_call(|| { Ok(None) }).unwrap(), None::<bool>, "case OK(None)");
+        with_mock_env(|env| {
+            assert_eq!(safe_call(env, || { Ok(None) }).unwrap(), None::<bool>, "case OK(None)");
+        });
 
-        // Case 3: Еrr() -> convert to Ok(None)
-        assert_eq!(safe_call(|| -> EmacsResult<Option<bool>> { bail!("fail") }).unwrap(), None::<bool>, "case Err()");
+        // Case 3: Err() -> convert to Ok(None)
+        with_mock_env(|env| {
+            assert_eq!(safe_call(env, || { bail!("fail") }).unwrap(), None::<bool>, "case Err()");
+        });
     }
 }
 

@@ -11,7 +11,7 @@ pub fn defun_safe(_attr_ts: TokenStream, item_ts: TokenStream) -> TokenStream {
     let original_body = fn_item.block.clone();
     fn_item.block = parse_quote! {
         {
-            crate::safe_call(|| #original_body)
+            crate::safe_call(env, || #original_body)
         }
     };
 

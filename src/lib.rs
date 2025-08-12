@@ -2,6 +2,7 @@
 
 mod bufext;
 mod connection;
+mod errors;
 pub mod logger;
 mod msg;
 mod socket;
@@ -16,6 +17,7 @@ pub mod test_utils;
 mod tests;
 
 use anyhow::{anyhow, bail, Context};
+use atomic_enum::atomic_enum;
 use crossbeam_channel::{Receiver, Sender};
 use emacs::{defun, Env, IntoLisp, Result as EmacsResult, Value};
 
@@ -28,13 +30,12 @@ use serde::de::DeserializeOwned;
 use serde::{Deserialize, Serialize};
 use serde_json::json;
 
-use std::panic::Location;
-
 use std::{
     collections::{HashMap, VecDeque},
     fmt::Debug,
     io::{self, Read, Write},
     ops::{Deref, DerefMut},
+    panic::Location,
     process::{Child, Command, ExitStatus, Stdio},
     sync::atomic::{AtomicBool, AtomicI32, Ordering},
     sync::{Arc, LazyLock, Mutex},
@@ -42,7 +43,7 @@ use std::{
     time::{Duration, Instant},
 };
 
-use atomic_enum::atomic_enum;
+use errors::UserFacing;
 use logger::Logger;
 use lspce_macros::defun_safe;
 pub use msg::{Message, Notification, Request, RequestId, Response};
@@ -560,8 +561,16 @@ fn with_projects_mut<F, R>(f: F) -> R
 where
     F: FnOnce(&mut Projects) -> R,
 {
-    let mut projects_guard = projects().lock().unwrap();
-    f(&mut projects_guard)
+    f(&mut projects().lock().unwrap())
+}
+
+/// Acqures a lock on projects, finds the project by `root_uri`, and applies the function `f` to it.
+/// Returns `None` if the project is not found or Option<T>, if found
+fn with_project_mut<F, T>(root_uri: &str, f: F) -> Option<T>
+where
+    F: FnOnce(&mut Project) -> T,
+{
+    with_projects_mut(|projects| projects.get_mut(root_uri).map(f))
 }
 
 ///
@@ -696,55 +705,57 @@ macro_rules! env_message_and_bail {
     };
 }
 
-#[track_caller]
-fn with_project_and_env<F, T>(
-    env: &Env, root_uri: &str, caller_loc: Option<&Location<'static>>, f: F,
-) -> EmacsResult<Option<T>>
+fn with_project<F, T>(root_uri: &str, f: F) -> EmacsResult<Option<T>>
 where
     F: FnOnce(&mut Project) -> EmacsResult<Option<T>>,
 {
-    with_projects_mut(|projects| {
-        let caller = Some(caller_loc.unwrap_or_else(|| Location::caller()));
-
-        match projects.get_mut(root_uri) {
-            Some(project) => f(project),
-            None => {
-                env_message_and_bail!(env, @ caller, "no project found for '{}'", root_uri)
-            }
-        }
-    })
+    match with_project_mut(root_uri, f) {
+        Some(result) => result,
+        None => Err(anyhow::anyhow!("No project found for '{}'", root_uri).context(UserFacing)),
+    }
 }
 
-#[track_caller]
-fn with_server_and_env<F, T>(
-    env: &Env, root_uri: &str, file_type: &str, require_running: bool, f: F,
-) -> EmacsResult<Option<T>>
+fn with_server<F, T>(root_uri: &str, file_type: &str, require_running: bool, f: F) -> EmacsResult<Option<T>>
 where
     F: FnOnce(&mut LspServer) -> EmacsResult<Option<T>>,
 {
-    let caller = Some(Location::caller());
-    with_project_and_env(env, root_uri, caller, |project| match project.servers.get_mut(file_type) {
+    with_project(root_uri, |project| match project.servers.get_mut(file_type) {
         Some(Some(server)) => {
             if require_running && server.status() != ServerStatus::Running {
-                env_message_and_bail!(env, @ caller, "LSP server for {}({}) is not ready", root_uri, file_type)
+                Err(anyhow::anyhow!("LSP server for {}({}) is not ready", root_uri, file_type).context(UserFacing))
+            } else {
+                f(server)
             }
-            f(server)
         }
-        _ => {
-            env_message_and_bail!(env, @ caller, "No LSP server for {}({})", root_uri, file_type)
-        }
+        _ => Err(anyhow::anyhow!("No LSP server for {}({})", root_uri, file_type).context(UserFacing)),
     })
 }
 
-/// Executes a closure `f` and on error, log and return `Ok(None)`.
+// Trait for safe_call to use + mocking. Send message throught emacs env back to user
+trait UserMsgEnv {
+    fn user_message(&self, text: &str);
+}
+
+impl UserMsgEnv for Env {
+    fn user_message(&self, text: &str) {
+        let _ = self.lspce_message(text);
+    }
+}
+
+/// Executes a closure `f` and converts Err result.
+/// On error, logs (optionally send a user message is Error is tagged as UserFacing) and return `Ok(None)`.
 #[track_caller]
-fn safe_call<T, F>(f: F) -> EmacsResult<Option<T>>
+fn safe_call<T, F>(env: &Env, f: F) -> EmacsResult<Option<T>>
 where
     F: FnOnce() -> EmacsResult<Option<T>>, // Result<T> is result::Result<T, anyhow::Error>
 {
     match f() {
         ok @ Ok(_) => ok,
         Err(e) => {
+            // User-facing error. Extract the root cause message and send to Emacs
+            if e.downcast_ref::<UserFacing>().is_some() {
+                let _ = env.lspce_message(e.root_cause().to_string());
+            }
             Logger::error(format!("Error: @{}: {}", Location::caller(), e));
             Ok(None)
         }
@@ -866,24 +877,23 @@ pub fn shutdown_server(
 #[defun_safe]
 #[defun]
 fn shutdown(env: &Env, root_uri: String, file_type: String, request: String) -> EmacsResult<Option<bool>> {
-    with_project_and_env(env, &root_uri, None, |project| {
+    with_project(&root_uri, |project| {
         if let Some(Some(mut server)) = project.servers.remove(&file_type) {
             let shutdown_req = Message::from_str_typed::<Request>(&request).unwrap_or_else(|e| {
                 Logger::info(format!("Failed to parse shutdown request: {}. Using default", e));
                 Request::new_shutdown()
             });
             std::thread::spawn(move || shutdown_server(&mut server, shutdown_req, None));
-            Ok(Some(true))
-        } else {
-            env_message_and_bail!(env, "No {} server found in project '{}'", file_type, root_uri)
+            return Ok(Some(true));
         }
+        Ok(Some(false))
     })
 }
 
 #[defun_safe]
 #[defun]
 fn server(env: &Env, root_uri: String, file_type: String) -> EmacsResult<Option<String>> {
-    with_server_and_env(env, &root_uri, &file_type, false, |server| Ok(Some(server.server_info.to_json_string()?)))
+    with_server(&root_uri, &file_type, false, |server| Ok(Some(server.server_info.to_json_string()?)))
 }
 
 fn _request_async(server: &mut LspServer, req: Request) -> EmacsResult<Option<bool>> {
@@ -909,7 +919,7 @@ fn _request_async(server: &mut LspServer, req: Request) -> EmacsResult<Option<bo
 #[defun_safe]
 #[defun]
 fn request_async(env: &Env, root_uri: String, file_type: String, json: String) -> EmacsResult<Option<bool>> {
-    with_server_and_env(env, &root_uri, &file_type, true, |server| {
+    with_server(&root_uri, &file_type, true, |server| {
         Logger::trace(format!("request {}", &json));
         let msg = Message::from_str_typed::<Request>(&json).context("request_async")?;
         _request_async(server, msg)
@@ -919,7 +929,7 @@ fn request_async(env: &Env, root_uri: String, file_type: String, json: String) -
 #[defun_safe]
 #[defun]
 fn notify(env: &Env, root_uri: String, file_type: String, json: String) -> EmacsResult<Option<bool>> {
-    with_server_and_env(env, &root_uri, &file_type, true, |server| {
+    with_server(&root_uri, &file_type, true, |server| {
         Logger::trace(format!("notify {}", &json));
         let msg = Message::from_str_typed::<Notification>(&json).context("notify")?;
         server.write(msg)?;
@@ -933,7 +943,7 @@ fn notify(env: &Env, root_uri: String, file_type: String, json: String) -> Emacs
 fn read_response_exact(
     env: &Env, root_uri: String, file_type: String, id: String, method: String,
 ) -> EmacsResult<Option<String>> {
-    with_server_and_env(env, &root_uri, &file_type, true, |server| {
+    with_server(&root_uri, &file_type, true, |server| {
         Ok(server.read_response_exact(RequestId::from(id), method).map(|r| r.into_string()))
     })
 }
@@ -941,15 +951,13 @@ fn read_response_exact(
 #[defun_safe]
 #[defun]
 fn read_notification(env: &Env, root_uri: String, file_type: String) -> EmacsResult<Option<String>> {
-    with_server_and_env(env, &root_uri, &file_type, true, |server| {
-        Ok(server.read_notification().map(|r| r.into_string()))
-    })
+    with_server(&root_uri, &file_type, true, |server| Ok(server.read_notification().map(|r| r.into_string())))
 }
 
 #[defun_safe]
 #[defun]
 fn read_file_diagnostics(env: &Env, root_uri: String, file_type: String, uri: String) -> EmacsResult<Option<String>> {
-    with_server_and_env(env, &root_uri, &file_type, true, |server| {
+    with_server(&root_uri, &file_type, true, |server| {
         let mut server_data = server.server_data.lock().unwrap();
         Ok(server_data
             .file_infos
@@ -962,13 +970,11 @@ fn read_file_diagnostics(env: &Env, root_uri: String, file_type: String, uri: St
 #[defun_safe]
 #[defun]
 fn read_latest_response_id(env: &Env, root_uri: String, file_type: String) -> EmacsResult<Option<String>> {
-    with_server_and_env(env, &root_uri, &file_type, true, |server| {
-        Ok(Some(server.get_latest_response_id().to_string()))
-    })
+    with_server(&root_uri, &file_type, true, |server| Ok(Some(server.get_latest_response_id().to_string())))
 }
 
 #[defun_safe]
 #[defun]
 fn read_latest_response_tick(env: &Env, root_uri: String, file_type: String) -> EmacsResult<Option<String>> {
-    with_server_and_env(env, &root_uri, &file_type, true, |server| Ok(Some(server.get_latest_response_tick())))
+    with_server(&root_uri, &file_type, true, |server| Ok(Some(server.get_latest_response_tick())))
 }

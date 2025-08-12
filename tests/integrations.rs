@@ -7,30 +7,6 @@ use std::{io, time::Duration};
 const DUMMY_LSP_CMD: &str = "target/debug/dummy_lsp";
 const ONE_SEC: Duration = Duration::from_secs(1);
 
-/// Creates a mock Env, uses it for the provided function, and then
-/// safely disposes of it without running its destructor
-fn with_mock_env<F, R>(f: F) -> R
-where
-    F: FnOnce(&emacs::Env) -> R,
-{
-    use std::ffi::c_void;
-
-    // Create a dummy raw pointer that won't be dereferenced
-    let dummy_ptr = Box::into_raw(Box::new(42u8)) as *mut c_void;
-
-    // Create a mock Env with our dummy pointer
-    let env = unsafe { emacs::Env::new(dummy_ptr as *mut _) };
-
-    // Call the function with a reference to our env
-    let result = f(&env);
-
-    // Prevent the destructor from running (avoids null pointer dereference)
-    std::mem::forget(env);
-
-    // Return the result from the function
-    result
-}
-
 // handy for manual testing and to see log messages
 pub fn setup_test_logger() {
     #[cfg(unix)]
