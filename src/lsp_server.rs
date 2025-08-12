@@ -283,7 +283,7 @@ impl LspServer {
         Logger::info(format!("Starting shutdown protocol for {}", self.name_id));
         let req_id = req.id.clone();
 
-        _request_async(self, req)?;
+        self.request_async(req)?;
 
         let start_time = Instant::now();
         while start_time.elapsed() <= timeout {
@@ -420,6 +420,26 @@ impl LspServer {
         }
     }
 
+    pub fn request_async(&self, req: Request) -> EmacsResult<Option<bool>> {
+        let request_tick = req.request_tick.as_ref().map(|s| s.clone()).unwrap_or_else(|| {
+            use std::time::{SystemTime, UNIX_EPOCH};
+            let now = SystemTime::now().duration_since(UNIX_EPOCH).unwrap();
+            format!("{}.{}", now.as_secs(), now.subsec_micros())
+        });
+        self.update_request_info(req.id.clone(), request_tick);
+
+        // TODO: should we let LSP server to manage and clear diagnostics and remove this entirely?
+        if req.method == "textDocument/didChange" || req.method == "textDocument/didClose" {
+            // extract uri, wihotut parsing the whole request
+            if let Some(uri) = req.params.get("textDocument").and_then(|td| td.get("uri")).and_then(|uri| uri.as_str())
+            {
+                self.clear_diagnostics(uri);
+            }
+        }
+        self.write(req)?;
+        Ok(Some(true))
+    }
+
     pub fn read_response(&self) -> Option<Response> {
         let mut server_data = self.server_data.lock().unwrap();
         server_data.responses.pop_front()
@@ -480,23 +500,4 @@ impl Drop for LspServer {
             });
         }
     }
-}
-
-pub(crate) fn _request_async(server: &mut LspServer, req: Request) -> EmacsResult<Option<bool>> {
-    let request_tick = req.request_tick.as_ref().map(|s| s.clone()).unwrap_or_else(|| {
-        use std::time::{SystemTime, UNIX_EPOCH};
-        let now = SystemTime::now().duration_since(UNIX_EPOCH).unwrap();
-        format!("{}.{}", now.as_secs(), now.subsec_micros())
-    });
-    server.update_request_info(req.id.clone(), request_tick);
-
-    // TODO: should we let LSP server to manage and clear diagnostics and remove this entirely?
-    if req.method == "textDocument/didChange" || req.method == "textDocument/didClose" {
-        // extract uri, wihotut parsing the whole request
-        if let Some(uri) = req.params.get("textDocument").and_then(|td| td.get("uri")).and_then(|uri| uri.as_str()) {
-            server.clear_diagnostics(uri);
-        }
-    }
-    server.write(req)?;
-    Ok(Some(true))
 }

@@ -49,7 +49,7 @@ use std::{
 use env::{EnvExt, UserMsgEnv};
 use errors::UserFacing;
 use logger::Logger;
-use lsp_server::{AtomicServerStatus, LspServerData, LspServerInfo, Resources, ServerStatus, _request_async};
+use lsp_server::{AtomicServerStatus, LspServerData, LspServerInfo, Resources, ServerStatus};
 pub use lsp_server::{LspServer, ResourceState};
 use lspce_macros::defun_safe;
 pub use msg::{Message, Notification, Request, RequestId, Response};
@@ -298,7 +298,7 @@ fn connect(
 
 pub fn initialize(env: &Env, server: &mut LspServer, req: Request, timeout: Duration) -> EmacsResult<()> {
     Logger::info(format!("initialize request {}", &req));
-    _request_async(server, req)?;
+    server.request_async(req)?;
 
     let start_time = Instant::now();
     loop {
@@ -390,8 +390,8 @@ fn server(env: &Env, root_uri: String, file_type: String) -> EmacsResult<Option<
 fn request_async(env: &Env, root_uri: String, file_type: String, json: String) -> EmacsResult<Option<bool>> {
     with_server(&root_uri, &file_type, true, |server| {
         Logger::trace(format!("request {}", &json));
-        let msg = Message::from_str_typed::<Request>(&json).context("request_async")?;
-        _request_async(server, msg)
+        let msg = Message::from_str_typed::<Request>(&json)?;
+        server.request_async(msg)
     })
 }
 
@@ -400,7 +400,7 @@ fn request_async(env: &Env, root_uri: String, file_type: String, json: String) -
 fn notify(env: &Env, root_uri: String, file_type: String, json: String) -> EmacsResult<Option<bool>> {
     with_server(&root_uri, &file_type, true, |server| {
         Logger::trace(format!("notify {}", &json));
-        let msg = Message::from_str_typed::<Notification>(&json).context("notify")?;
+        let msg = Message::from_str_typed::<Notification>(&json)?;
         server.write(msg)?;
         Ok(Some(true))
     })
