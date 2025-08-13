@@ -28,6 +28,7 @@ lspce-module = { path = ".", features = ["test-utils"] }
 
 [features]
 test-utils = []
+dummy-lsp-bin = []
 
 [profile.dev]
 debug = 0
@@ -39,4 +40,9 @@ codegen-units = 1
 [[test]]
 name = "integrations"
 path = "tests/integrations.rs"
-required-features = ["test-utils"]
+required-features = ["test-utils", "dummy-lsp-bin"]
+
+[[bin]]
+name = "dummy_lsp"
+path = "tests/bin/dummy_lsp.rs"
+required-features = ["dummy-lsp-bin"]

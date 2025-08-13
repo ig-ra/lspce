@@ -11,13 +11,17 @@ const SLEEP_TIME: std::time::Duration = std::time::Duration::from_secs(5);
 #[derive(FromArgs, Debug)]
 /// Dummy LSP process for integration testing
 struct Args {
-    /// ignore shutdown requests
+    /// ignore shutdown request and get stalled
     #[argh(switch)]
-    ignore_shutdown: bool,
+    stall_on_shutdown: bool,
 
-    /// ignore exit requests
+    /// voluntarily exit on shutdown request
     #[argh(switch)]
-    ignore_exit: bool,
+    exit_on_shutdown: bool,
+
+    /// voluntarily exit on shutdown request
+    #[argh(switch)]
+    abort_on_shutdown: bool,
 
     /// specific exit value for process
     #[argh(option)]
@@ -52,55 +56,56 @@ fn main() {
     let mut stdout = std::io::stdout();
     let mut reader = BufReader::new(stdin.lock());
 
-    log_stderr!("dummy-lsp: starting");
+    log_stderr!("starting");
     loop {
         match Message::read(&mut reader) {
             Ok(Some(Message::Request(req))) => {
-                log_stderr!("dummy-lsp: got request <{}>", req.method);
+                log_stderr!("got msg::request <{}>", req.method);
                 match req.method.as_str() {
                     "initialize" => {
                         let response = make_response(&req.id, json!({"capabilities": {}}));
                         send_response(&mut stdout, &response);
                     }
                     "shutdown" => {
-                        if !args.ignore_shutdown {
+                        if args.stall_on_shutdown {
+                            log_stderr!("stall_on_shutdown");
+                            loop {
+                                std::thread::sleep(SLEEP_TIME);
+                            }
+                        } else if args.abort_on_shutdown {
+                            log_stderr!("abort_on_shutdown");
+                            process::abort();
+                        } else if args.exit_on_shutdown {
+                            log_stderr!("exit_on_shutdown");
+                            break;
+                        } else {
                             let response = make_response(&req.id, serde_json::Value::Null);
                             send_response(&mut stdout, &response);
-                        } else {
-                            log_stderr!("dummy lsp: ignoring shutdown");
-                            std::thread::sleep(SLEEP_TIME);
                         }
                     }
                     _ => {}
                 }
             }
             Ok(Some(Message::Notification(notification))) => {
-                log_stderr!("dummy-lsp: got notification <{}>", notification.method);
+                log_stderr!("got msg::notification <{}>", notification.method);
                 if notification.method == "exit" {
-                    if !args.ignore_exit {
-                        break;
-                    } else {
-                        log_stderr!("dummy lsp: ignoring exit and entering infinite sleep");
-                        loop {
-                            std::thread::sleep(SLEEP_TIME);
-                        }
-                    }
+                    break;
                 }
             }
             Ok(Some(Message::Response(_))) => {
-                log_stderr!("dummy-lsp: got unexpected response");
+                log_stderr!("got msg::response. Unexpected. Shouldn't happen.");
             }
             Ok(None) => {
                 //
-                log_stderr!("dummy-lsp: got EOF. ignore closed stdin");
-                if args.ignore_exit {
-                    log_stderr!("dummy lsp: ignoring EOF and entering infinite sleep");
-                    loop {
-                        std::thread::sleep(SLEEP_TIME);
-                    }
-                } else {
-                    break;
-                }
+                log_stderr!("got EOF");
+                // if args.ignore_exit {
+                //     log_stderr!("dummy lsp: ignoring EOF and entering infinite sleep");
+                //     loop {
+                //         std::thread::sleep(SLEEP_TIME);
+                //     }
+                // } else {
+                //     break;
+                // }
             } // EOF
             Err(e) => {
                 log_stderr!("dummy-lsp: failed to parse message: {}", e);
