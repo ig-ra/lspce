@@ -1,7 +1,7 @@
 #![allow(unused)]
 
 use lspce_module::test_utils::*;
-use lspce_module::{logger, shutdown_server, LspServer, Request, ResourceState, ThreadResult};
+use lspce_module::{logger, shutdown_server, LspServer, Notification, Request, ResourceState, ThreadResult};
 use std::{io, time::Duration};
 
 const DUMMY_LSP_CMD: &str = "target/debug/dummy_lsp";
@@ -33,8 +33,18 @@ fn make_request(id: &mut i32, method: &str, params: serde_json::Value) -> Reques
     serde_json::from_value(json).expect(&format!("Failed to parse {} request JSON", method))
 }
 
+fn make_notification(id: &mut i32, method: &str) -> Request {
+    let json = serde_json::json!({
+        "jsonrpc": "2.0",
+        "method": method,
+        "params": serde_json::Value::Null,
+    });
+
+    serde_json::from_value(json).expect(&format!("Failed to parse {} notification JSON", method))
+}
+
 fn start_and_initialize_server(_id: &mut i32, args: &str) -> LspServer {
-    setup_test_logger();
+    //setup_test_logger();
     lspce_module::lspce_init();
 
     // create new dummy_lsp server with provided args
@@ -93,20 +103,25 @@ fn thread_res_io_err(kind: io::ErrorKind) -> ThreadResult {
     ThreadResult::IoError(io::Error::from(kind))
 }
 
-fn normal_exit_thread_states() -> [Vec<ThreadResult>; 3] {
-    [
-        vec![ThreadResult::Ok, thread_res_io_err(io::ErrorKind::NotConnected)],
+fn thread_vec_reader_and_stderr() -> (Vec<ThreadResult>, Vec<ThreadResult>) {
+    (
         vec![thread_res_io_err(io::ErrorKind::UnexpectedEof)],
         vec![ThreadResult::Ok, thread_res_io_err(io::ErrorKind::UnexpectedEof)],
+    )
+}
+
+fn normal_exit_thread_states() -> [Vec<ThreadResult>; 3] {
+    let (reader, stderr) = thread_vec_reader_and_stderr();
+    [
+        vec![ThreadResult::Ok, thread_res_io_err(io::ErrorKind::NotConnected)],
+        reader,
+        stderr,
     ]
 }
 
 fn abnormal_exit_thread_states() -> [Vec<ThreadResult>; 3] {
-    [
-        vec![thread_res_io_err(io::ErrorKind::NotConnected)],
-        vec![thread_res_io_err(io::ErrorKind::UnexpectedEof)],
-        vec![ThreadResult::Ok, thread_res_io_err(io::ErrorKind::UnexpectedEof)],
-    ]
+    let (reader, stderr) = thread_vec_reader_and_stderr();
+    [vec![thread_res_io_err(io::ErrorKind::NotConnected)], reader, stderr]
 }
 
 /// Tests normal graceful shutdown of LSP server, e.g. shutdown request, followed by exit notification and actual exit.
@@ -127,14 +142,13 @@ fn test_graceful_shutdown() {
 #[test]
 fn test_graceful_shutdown_escalated_to_forced() {
     let mut id = 10;
-    setup_test_logger();
 
     let mut server = start_and_initialize_server(&mut id, "--stall-on-shutdown");
     let shutdown_req = make_request(&mut id, "shutdown", serde_json::Value::Null);
     let exit_status = shutdown_server(&mut server, shutdown_req, Some(ONE_SEC));
 
     assert_thread_states(&server.resources.state, abnormal_exit_thread_states());
-    assert_exit_status(exit_status.unwrap(), ExitType::Signal(9));
+    assert_exit_status(exit_status.unwrap(), ExitType::Signal(SIGKILL));
 }
 
 /// Tests abnormal voluntary exit of LSP
@@ -163,12 +177,33 @@ fn test_aborted_lsp() {
     let exit_status = shutdown_server(&mut server, shutdown_req, Some(ONE_SEC));
 
     assert_thread_states(&server.resources.state, abnormal_exit_thread_states());
-    #[cfg(unix)]
-    {
-        const SIGABRT: i32 = 6;
-        assert_exit_status(exit_status.unwrap(), ExitType::Signal(SIGABRT));
-    }
-    // FIXME: reaper?
+    assert_exit_status(exit_status.unwrap(), ExitType::Signal(SIGABRT));
 }
 
-// FIXME: check closure of stdin/or stdout?
+/// Ask DUMMY_LSP to close its STDIN. This will it to be unable to read messages (ClosedPipe, UnexpectedEOF) and it will be stalled (by design).
+/// Then LSP Writer should fail with BrokenPipe on subsequent write
+#[test]
+fn test_lsp_closes_stdin() {
+    let mut id = 25;
+    setup_test_logger();
+
+    // Assumes dummy_lsp supports --close-stdin to close its stdin after startup
+    let mut server = start_and_initialize_server(&mut id, "--allow-close-fd");
+
+    // cause dummy_lsp to close its stdin
+    let msg = server.write(Notification::new("test_close_stdin")).unwrap();
+    std::thread::sleep(Duration::from_millis(100));
+
+    // on the subsequent message cause lspce to discover the error
+    server.write(Notification::new("dummy")).unwrap();
+
+    std::thread::sleep(Duration::from_millis(100)); // FIXME: should we wait?
+
+    let (reader, stderr) = thread_vec_reader_and_stderr();
+    let expected = [vec![thread_res_io_err(io::ErrorKind::BrokenPipe)], reader, stderr];
+
+    // server will be dropped anyway whem test will be finished. But let's do it explicitly
+    let exit_status = server.teardown(Duration::ZERO);
+    assert_exit_status(exit_status.unwrap(), ExitType::Signal(SIGKILL));
+}
+

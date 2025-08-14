@@ -48,7 +48,7 @@ fn send_response(stdout: &mut std::io::Stdout, response: &str) {
 
 macro_rules! log_stderr {
     ($($arg:tt)*) => {
-        eprintln!($($arg)*);
+        eprintln!("DUMMY_LSP: {}", format!($($arg)*));
         std::io::stderr().flush().unwrap();
     };
 }
@@ -95,7 +95,7 @@ fn main() {
                 match notification.method.as_str() {
                     "exit" => break,
                     method if method.starts_with("test_close_std") && args.allow_close_fd => {
-                        log_stderr!("test_close_fd: {}", method);
+                        log_stderr!("test_close_fd: {}", method.split("_").nth(2).unwrap());
                         unsafe {
                             libc::close(match method {
                                 "test_close_stdin" => libc::STDIN_FILENO,
@@ -122,8 +122,14 @@ fn main() {
                 //     break;
                 // }
             } // EOF
+            Err(e) if e.kind() == std::io::ErrorKind::UnexpectedEof => {
+                log_stderr!("got EOF. STDIN closed. Stall ourself");
+                loop {
+                    std::thread::sleep(SLEEP_TIME);
+                }
+            }
             Err(e) => {
-                log_stderr!("dummy-lsp: failed to parse message: {}", e);
+                log_stderr!("failed to parse message: {}", e);
             }
         }
     }
