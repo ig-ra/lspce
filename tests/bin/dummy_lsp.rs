@@ -19,9 +19,13 @@ struct Args {
     #[argh(switch)]
     exit_on_shutdown: bool,
 
-    /// voluntarily exit on shutdown request
+    /// abort on shutdown request
     #[argh(switch)]
     abort_on_shutdown: bool,
+
+    /// close stdin
+    #[argh(switch)]
+    allow_close_fd: bool,
 
     /// specific exit value for process
     #[argh(option)]
@@ -83,13 +87,24 @@ fn main() {
                             send_response(&mut stdout, &response);
                         }
                     }
-                    _ => {}
+                    _ => continue,
                 }
             }
             Ok(Some(Message::Notification(notification))) => {
                 log_stderr!("got msg::notification <{}>", notification.method);
-                if notification.method == "exit" {
-                    break;
+                match notification.method.as_str() {
+                    "exit" => break,
+                    method if method.starts_with("test_close_std") && args.allow_close_fd => {
+                        log_stderr!("test_close_fd: {}", method);
+                        unsafe {
+                            libc::close(match method {
+                                "test_close_stdin" => libc::STDIN_FILENO,
+                                "test_close_stdout" => libc::STDOUT_FILENO,
+                                _ => libc::STDERR_FILENO,
+                            });
+                        }
+                    }
+                    _ => continue,
                 }
             }
             Ok(Some(Message::Response(_))) => {

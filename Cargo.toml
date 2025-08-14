@@ -18,19 +18,19 @@ serde = { version = "1.0", features = ["derive"] }
 serde_json = "1.0"
 bytes = "1.0"
 anyhow = "1.0"
-argh = "0.1"
 wait-timeout = "0.2"
 atomic_enum = "0.3"
+argh = { version = "0.1", optional = true }
+libc = { version = "0.2", optional = true }
 
 [dev-dependencies]
 lspce-module = { path = ".", features = ["test-utils", "dummy-lsp-bin"] }
 libc = "0.2"
 argh = "0.1"
-serde_json = "1.0"
 
 [features]
 test-utils = []
-dummy-lsp-bin = []
+dummy-lsp-bin = ["libc", "argh"]
 
 [profile.dev]
 debug = 0
