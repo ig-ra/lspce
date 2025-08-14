@@ -20,11 +20,13 @@ bytes = "1.0"
 anyhow = "1.0"
 argh = "0.1"
 wait-timeout = "0.2"
-
-atomic_enum = "0.2"
+atomic_enum = "0.3"
 
 [dev-dependencies]
-lspce-module = { path = ".", features = ["test-utils"] }
+lspce-module = { path = ".", features = ["test-utils", "dummy-lsp-bin"] }
+libc = "0.2"
+argh = "0.1"
+serde_json = "1.0"
 
 [features]
 test-utils = []
@@ -40,7 +42,7 @@ codegen-units = 1
 [[test]]
 name = "integrations"
 path = "tests/integrations.rs"
-required-features = ["test-utils", "dummy-lsp-bin"]
+required-features = ["test-utils"]
 
 [[bin]]
 name = "dummy_lsp"
