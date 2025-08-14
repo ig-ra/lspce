@@ -346,11 +346,11 @@ impl Request {
 }
 
 impl Notification {
-    pub fn new(method: impl Into<String>, params: impl Serialize) -> Result<Notification, serde_json::Error> {
+    pub fn new_params(method: impl Into<String>, params: impl Serialize) -> Result<Notification, serde_json::Error> {
         Ok(Notification { method: method.into(), params: serde_json::to_value(params)?, ..Default::default() })
     }
-    pub fn new_exit() -> Notification {
-        Notification { method: "exit".to_string(), ..Default::default() }
+    pub fn new(method: impl Into<String>) -> Notification {
+        Notification { method: method.into(), ..Default::default() }
     }
 }
 
@@ -403,7 +403,7 @@ mod tests {
     fn test_msg_serialization() {
         let test_cases: [(Message, &str); 4] = [
             (Request::new(1, "shutdown", serde_json::Value::Null).unwrap().into(), r#"{"id":1,"method":"shutdown"}"#),
-            (Notification::new("exit", serde_json::Value::Null).unwrap().into(), r#"{"method":"exit"}"#),
+            (Notification::new("exit").unwrap().into(), r#"{"method":"exit"}"#),
             (Response::new_ok(3, "success").unwrap().into(), r#"{"id":3,"result":"success"}"#),
             (Response::new_err("", -1, "fail").into(), r#"{"id":"","error":{"code":-1,"message":"fail"}}"#),
         ];

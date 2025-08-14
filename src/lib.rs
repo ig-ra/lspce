@@ -307,8 +307,7 @@ pub fn initialize(env: &Env, server: &mut LspServer, req: Request, timeout: Dura
             }
 
             let ir: InitializeResult = serde_json::from_value(response.result.context("Empty initialize response")?)?;
-
-            server.write(Notification::new("initialized", InitializedParams {})?)?;
+            server.write(Notification::new_params("initialized", InitializedParams {})?)?;
 
             server.server_info.capabilities = serde_json::to_string(&ir.capabilities)?;
             if let Some(si) = ir.server_info {

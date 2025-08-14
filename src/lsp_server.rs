@@ -288,7 +288,7 @@ impl LspServer {
         let start_time = Instant::now();
         while start_time.elapsed() <= timeout {
             if matches!(self.read_response(), Some(ref resp) if resp.id == req_id) {
-                self.write(Notification::new_exit());
+                self.write(Notification::new("exit"));
                 self.set_status(ServerStatus::Exiting);
                 Logger::info(format!("Shutdown protocol finished for {}", self.name_id));
                 return Ok(()); // graceful shutdown prococol completed sucessfully

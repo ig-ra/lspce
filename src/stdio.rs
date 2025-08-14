@@ -106,7 +106,7 @@ pub(crate) fn stdio_transport(
         }
         // notify dispatcher in all ways - exit flag, message and dropping channel
         exit_reader.store(true, Ordering::Relaxed);
-        let _ = s_from_lsp.send(Notification::new_exit().into()); // just to unblock channel
+        let _ = s_from_lsp.send(Notification::new("exit").into()); // just to unblock channel
         Logger::info("finished");
         res
     });
