@@ -180,30 +180,43 @@ fn test_aborted_lsp() {
     assert_exit_status(exit_status.unwrap(), ExitType::Signal(SIGABRT));
 }
 
-/// Ask DUMMY_LSP to close its STDIN. This will it to be unable to read messages (ClosedPipe, UnexpectedEOF) and it will be stalled (by design).
-/// Then LSP Writer should fail with BrokenPipe on subsequent write
+/// Ask DUMMY_LSP to close its STDIN without exit.
+/// This will cause DUMMY_LSP to fail in reading messages (ClosedPipe, UnexpectedEOF) and it will be stalled (by design).
+/// Then LSP Writer should fail (since LSP< is closed) with BrokenPipe on subsequent write.
 #[test]
 fn test_lsp_closes_stdin() {
     let mut id = 25;
-    setup_test_logger();
 
-    // Assumes dummy_lsp supports --close-stdin to close its stdin after startup
     let mut server = start_and_initialize_server(&mut id, "--allow-close-fd");
-
-    // cause dummy_lsp to close its stdin
     let msg = server.write(Notification::new("test_close_stdin")).unwrap();
     std::thread::sleep(Duration::from_millis(100));
 
-    // on the subsequent message cause lspce to discover the error
+    // subsequent message will cause lspce to discover the error
     server.write(Notification::new("dummy")).unwrap();
-
-    std::thread::sleep(Duration::from_millis(100)); // FIXME: should we wait?
-
-    let (reader, stderr) = thread_vec_reader_and_stderr();
-    let expected = [vec![thread_res_io_err(io::ErrorKind::BrokenPipe)], reader, stderr];
 
     // server will be dropped anyway whem test will be finished. But let's do it explicitly
     let exit_status = server.teardown(Duration::ZERO);
+    let (reader, stderr) = thread_vec_reader_and_stderr();
+    let expected = [vec![thread_res_io_err(io::ErrorKind::BrokenPipe)], reader, stderr];
+    assert_thread_states(&server.resources.state, expected);
     assert_exit_status(exit_status.unwrap(), ExitType::Signal(SIGKILL));
 }
 
+/// Ask DUMMY_LSP to close its STDOUT without exit.
+/// This should unblock LSPCE reader thread, raise exit flag and lead to exit of all threads consequently.
+#[test]
+fn test_lsp_closes_stdout() {
+    let mut id = 25;
+    let mut server = start_and_initialize_server(&mut id, "--allow-close-fd");
+    let msg = server.write(Notification::new("test_close_stdout")).unwrap();
+    std::thread::sleep(Duration::from_millis(100));
+
+    // server will be dropped anyway whem test will be finished. But let's do it explicitly
+    let exit_status = server.teardown(Duration::ZERO);
+    assert_thread_states(&server.resources.state, abnormal_exit_thread_states());
+    assert_exit_status(exit_status.unwrap(), ExitType::Signal(SIGKILL));
+}
+
+// FIXME: project and reaper tests?
+// Test stalled or stdin is enough? maybe test stalled messages that we are not getting answers? need to recheck server logic.
+// Should we rely on reaper check in exit, unexpected kill, and close stdin/stdout
