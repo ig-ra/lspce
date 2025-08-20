@@ -12,8 +12,9 @@ use serde::{de::DeserializeOwned, Deserialize, Serialize};
 ///
 /// ```rust
 /// use lspce_module::{Request, RequestId, Response, Notification};
-/// let _ = Request::new(3, "shutdown", serde_json::Value::Null);
-/// let _ = Notification::new("exit", serde_json::Value::Null);
+/// let _ = Request::new(3, "dummy", serde_json::Value::Null);
+/// let _ = Request::new_shutdown();
+/// let _ = Notification::new("exit");
 /// let _ = Response::new_ok(1, "success");
 /// let _ = Response::new_err("", -1, "fail");
 ///
@@ -402,8 +403,8 @@ mod tests {
     #[test]
     fn test_msg_serialization() {
         let test_cases: [(Message, &str); 4] = [
-            (Request::new(1, "shutdown", serde_json::Value::Null).unwrap().into(), r#"{"id":1,"method":"shutdown"}"#),
-            (Notification::new("exit").unwrap().into(), r#"{"method":"exit"}"#),
+            (Request::new_shutdown().into(), r#"{"id":"shutdown","method":"shutdown"}"#),
+            (Notification::new("exit").into(), r#"{"method":"exit"}"#),
             (Response::new_ok(3, "success").unwrap().into(), r#"{"id":3,"result":"success"}"#),
             (Response::new_err("", -1, "fail").into(), r#"{"id":"","error":{"code":-1,"message":"fail"}}"#),
         ];

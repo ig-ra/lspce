@@ -297,7 +297,7 @@ fn connect(
 }
 
 pub fn initialize(env: &Env, server: &mut LspServer, req: Request, timeout: Duration) -> EmacsResult<()> {
-    server.request_async(req)?;
+    server.send_message(req)?;
 
     let start_time = Instant::now();
     loop {
@@ -307,7 +307,7 @@ pub fn initialize(env: &Env, server: &mut LspServer, req: Request, timeout: Dura
             }
 
             let ir: InitializeResult = serde_json::from_value(response.result.context("Empty initialize response")?)?;
-            server.write(Notification::new_params("initialized", InitializedParams {})?)?;
+            server.send_message(Notification::new_params("initialized", InitializedParams {})?)?;
 
             server.server_info.capabilities = serde_json::to_string(&ir.capabilities)?;
             if let Some(si) = ir.server_info {
@@ -385,7 +385,7 @@ fn request_async(env: &Env, root_uri: String, file_type: String, json: String) -
     with_server(&root_uri, &file_type, true, |server| {
         Logger::trace(format!("API: Request {}", &json));
         let msg = Message::from_str_typed::<Request>(&json)?;
-        server.request_async(msg)
+        server.send_message(msg)
     })
 }
 
@@ -395,8 +395,7 @@ fn notify(env: &Env, root_uri: String, file_type: String, json: String) -> Emacs
     with_server(&root_uri, &file_type, true, |server| {
         Logger::trace(format!("API: Notify {}", &json));
         let msg = Message::from_str_typed::<Notification>(&json)?;
-        server.write(msg)?;
-        Ok(Some(true))
+        server.send_message(msg)
     })
 }
 

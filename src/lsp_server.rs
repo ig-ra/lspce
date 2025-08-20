@@ -283,12 +283,12 @@ impl LspServer {
         Logger::info(format!("Starting shutdown protocol for {}", self.name_id));
         let req_id = req.id.clone();
 
-        self.request_async(req)?;
+        self.send_message(req)?;
 
         let start_time = Instant::now();
         while start_time.elapsed() <= timeout {
             if matches!(self.read_response(), Some(ref resp) if resp.id == req_id) {
-                self.write(Notification::new("exit"));
+                self.send_message(Notification::new("exit"))?;
                 self.set_status(ServerStatus::Exiting);
                 Logger::info(format!("Shutdown protocol finished for {}", self.name_id));
                 return Ok(()); // graceful shutdown prococol completed sucessfully
@@ -412,31 +412,42 @@ impl LspServer {
         server_data.latest_response_tick.clone()
     }
 
-    pub fn write<M: Into<Message>>(&self, msg: M) -> EmacsResult<()> {
+    fn send_message_raw(&self, msg: Message) -> EmacsResult<()> {
         if let Some(sender) = &self.sender {
-            sender.send(msg.into()).context("Failed to send to LSP")
+            sender.send(msg).context("Failed to send to LSP")
         } else {
             Err(anyhow!("no LSP sender channel"))
         }
     }
 
-    pub fn request_async(&self, req: Request) -> EmacsResult<Option<bool>> {
-        let request_tick = req.request_tick.as_ref().map(|s| s.clone()).unwrap_or_else(|| {
-            use std::time::{SystemTime, UNIX_EPOCH};
-            let now = SystemTime::now().duration_since(UNIX_EPOCH).unwrap();
-            format!("{}.{}", now.as_secs(), now.subsec_micros())
-        });
-        self.update_request_info(req.id.clone(), request_tick);
+    pub fn send_message<M: Into<Message>>(&self, msg: M) -> EmacsResult<Option<bool>> {
+        let msg = msg.into();
+        match &msg {
+            Message::Request(req) => {
+                let request_tick = req.request_tick.as_ref().map(|s| s.clone()).unwrap_or_else(|| {
+                    use std::time::{SystemTime, UNIX_EPOCH};
+                    let now = SystemTime::now().duration_since(UNIX_EPOCH).unwrap();
+                    format!("{}.{}", now.as_secs(), now.subsec_micros())
+                });
 
-        // TODO: should we let LSP server to manage and clear diagnostics and remove this entirely?
-        if req.method == "textDocument/didChange" || req.method == "textDocument/didClose" {
-            // extract uri, wihotut parsing the whole request
-            if let Some(uri) = req.params.get("textDocument").and_then(|td| td.get("uri")).and_then(|uri| uri.as_str())
-            {
-                self.clear_diagnostics(uri);
+                // TODO: should we let LSP server to manage and clear diagnostics and remove this entirely?
+                if req.method == "textDocument/didChange" || req.method == "textDocument/didClose" {
+                    // extract uri, wihotut parsing the whole request
+                    if let Some(uri) =
+                        req.params.get("textDocument").and_then(|td| td.get("uri")).and_then(|uri| uri.as_str())
+                    {
+                        self.clear_diagnostics(uri);
+                    }
+                }
+                let id = req.id.clone(); // send first, then update
+                self.send_message_raw(msg)?;
+                self.update_request_info(id, request_tick);
+            }
+            _ => {
+                // Covers Message::Notification and Message::Response
+                self.send_message_raw(msg)?;
             }
         }
-        self.write(req)?;
         Ok(Some(true))
     }
 

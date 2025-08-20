@@ -188,11 +188,11 @@ fn test_lsp_closes_stdin() {
     let mut id = 25;
 
     let mut server = start_and_initialize_server(&mut id, "--allow-close-fd");
-    let msg = server.write(Notification::new("test_close_stdin")).unwrap();
+    let msg = server.send_message(Notification::new("test_close_stdin")).unwrap();
     std::thread::sleep(Duration::from_millis(100));
 
     // subsequent message will cause lspce to discover the error
-    server.write(Notification::new("dummy")).unwrap();
+    server.send_message(Notification::new("dummy")).unwrap();
 
     // server will be dropped anyway whem test will be finished. But let's do it explicitly
     let exit_status = server.teardown(Duration::ZERO);
@@ -208,7 +208,7 @@ fn test_lsp_closes_stdin() {
 fn test_lsp_closes_stdout() {
     let mut id = 25;
     let mut server = start_and_initialize_server(&mut id, "--allow-close-fd");
-    let msg = server.write(Notification::new("test_close_stdout")).unwrap();
+    let msg = server.send_message(Notification::new("test_close_stdout")).unwrap();
     std::thread::sleep(Duration::from_millis(100));
 
     // server will be dropped anyway whem test will be finished. But let's do it explicitly
