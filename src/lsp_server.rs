@@ -75,7 +75,7 @@ pub(crate) struct LspServerData {
     latest_response_id: RequestId,
 
     latest_response_tick: String,
-    request_ticks: HashMap<RequestId, String>,
+    pub(crate) request_ticks: HashMap<RequestId, String>,
 
     pub(crate) file_infos: HashMap<String, FileInfo>,
 
@@ -416,7 +416,7 @@ impl LspServer {
         if let Some(sender) = &self.sender {
             sender.send(msg).context("Failed to send to LSP")
         } else {
-            Err(anyhow!("no LSP sender channel"))
+            Err(anyhow!("No LSP sender channel"))
         }
     }
 

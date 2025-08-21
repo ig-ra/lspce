@@ -2,11 +2,11 @@ use super::*;
 
 #[cfg(test)]
 mod test_safe_call {
-    use crate::safe_call::safe_call;
     use crate::errors::UserFacing;
+    use crate::safe_call::safe_call;
     use crate::test_utils::MockEnv;
-    use emacs::Result as EmacsResult;
     use anyhow::{bail, Context};
+    use emacs::Result as EmacsResult;
 
     #[test]
     fn test_safe_call() {
@@ -185,7 +185,7 @@ mod test_lspserver_shutdown_with_mock {
         let shutdown_req = Request::new_shutdown();
         let req_id = shutdown_req.id.clone();
 
-        // Simulate the LSP server's response in a separate thread
+        // Simulate the LSP server's in a separate thread
         let lsp_thread = std::thread::spawn(move || {
             // 1. Assert that the LSP get the SHUTDOWN request
             let shutdown_msg = r_lsp.recv_timeout(ONE_SEC).expect("Did not get SHUTDOWN");
@@ -261,5 +261,63 @@ mod test_lspserver_teardown {
 
         assert_eq!(enter_count, 1, "Only one thread should perform teardown");
         assert_eq!(skip_count, results.len() - 1, "Other threads should see teardown already in progress");
+    }
+}
+
+#[cfg(test)]
+mod test_send_message {
+    use super::{mock_server, LspServer, Message, Notification, Request, Response};
+    use crate::test_utils::TENTH_OF_SEC;
+
+    #[test]
+    fn test_send_message_errors() {
+        let test_cases = [("drop", "Failed to send to LSP"), ("take", "No LSP sender channel")];
+
+        for (case, expected) in test_cases {
+            let (mut server, r_lsp, s_lsp) = mock_server();
+            match case {
+                "drop" => drop(r_lsp),
+                "take" => server.sender = None,
+                _ => unreachable!(),
+            }
+            let res = server.send_message(Request::new_shutdown());
+            assert!(res.is_err(), "send_message should fail");
+            let actual = res.unwrap_err().to_string();
+            assert!(actual.contains(expected), "unexpected error: {actual} != {expected}");
+
+            let server_data = server.server_data.lock().unwrap();
+            assert!(server_data.request_ticks.is_empty(), "No tick should be recorded");
+        }
+    }
+
+    #[test]
+    fn test_send_message_ok() {
+        fn test_send<M: Into<Message>>(msg: M) {
+            let (mut server, r_lsp, s_lsp) = mock_server();
+            let res = server.send_message(msg);
+            assert_eq!(res.unwrap(), Some(true), "send_message should succeed");
+
+            let lsp_msg = r_lsp.recv_timeout(TENTH_OF_SEC).expect("Should receive message");
+            let server_data = server.server_data.lock().unwrap();
+            match lsp_msg {
+                Message::Request(req) => {
+                    // TODO: test clear diagnostic
+                    // TODO: test tick creation?
+                    assert!(server_data.request_ticks.contains_key(&req.id), "Expected to record request ID")
+                }
+                _ => assert!(server_data.request_ticks.is_empty(), "Expected to record request ID"),
+            }
+        }
+
+        test_send(Request::new_shutdown());
+        test_send(Message::Request(Request::new_shutdown()));
+
+        test_send(Notification::new("exit"));
+        test_send(Message::Notification(Notification::new("exit")));
+
+        test_send(Response::new_ok(3, "success").unwrap());
+        test_send(Message::Response(Response::new_ok(3, "success").unwrap()));
+        test_send(Response::new_err("", -1, "fail"));
+        test_send(Message::Response(Response::new_err("", -1, "fail")));
     }
 }

@@ -1,4 +1,8 @@
 use std::process;
+pub const TENTH_OF_SEC: Duration = Duration::from_millis(100);
+pub const ONE_SEC: Duration = Duration::from_secs(1);
+pub const TWO_SECS: Duration = Duration::from_secs(2);
+
 pub enum ExitType {
     Code(i32),
     Signal(i32),
