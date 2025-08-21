@@ -13,7 +13,6 @@ use std::{
     thread,
 };
 
-use bytes::BytesMut;
 use crossbeam_channel::{bounded, Receiver, Sender};
 
 use crate::bufext::BufReadEofExt;

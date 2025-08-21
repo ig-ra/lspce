@@ -16,7 +16,6 @@ time = { version = "0.3", features = ["formatting", "macros", "local-offset"] }
 emacs = "0.19.0"
 serde = { version = "1.0", features = ["derive"] }
 serde_json = "1.0"
-bytes = "1.0"
 anyhow = "1.0"
 wait-timeout = "0.2"
 atomic_enum = "0.3"
