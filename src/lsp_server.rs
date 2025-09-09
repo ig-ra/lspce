@@ -70,10 +70,8 @@ pub enum ServerStatus {
 }
 
 pub(crate) struct LspServerData {
-    latest_request_id: RequestId,
     latest_request_tick: String,
     latest_response_id: RequestId,
-
     latest_response_tick: String,
     pub(crate) request_ticks: HashMap<RequestId, String>,
 
@@ -87,7 +85,6 @@ pub(crate) struct LspServerData {
 impl LspServerData {
     pub fn new() -> LspServerData {
         LspServerData {
-            latest_request_id: RequestId::from(-1),
             latest_request_tick: String::new(),
             latest_response_id: RequestId::from(-1),
             latest_response_tick: String::new(),
@@ -329,10 +326,6 @@ impl LspServer {
                                 r.request_tick = request_tick.clone();
                                 server_data.responses.push_back(r);
                             }
-                            Logger::debug(format!(
-                                "Latest response id is {}, current response id {}",
-                                server_data.latest_response_id, &id
-                            ));
                             // FIXME: what about String ids? how we define order?
                             if server_data.latest_response_id < id {
                                 server_data.latest_response_id = id;
@@ -395,9 +388,6 @@ impl LspServer {
 
     fn update_request_info(&self, id: RequestId, tick: String) {
         let mut server_data = self.server_data.lock().unwrap();
-        if server_data.latest_request_id < id {
-            server_data.latest_request_id = id.clone();
-        }
         server_data.latest_request_tick = tick.clone();
         server_data.request_ticks.insert(id, tick);
     }
@@ -424,30 +414,26 @@ impl LspServer {
         let msg = msg.into();
         match &msg {
             Message::Request(req) => {
+                // FIXME: need to handle server initiated requests too
+                // what to do with tick?
                 let request_tick = req.request_tick.as_ref().map(|s| s.clone()).unwrap_or_else(|| {
                     use std::time::{SystemTime, UNIX_EPOCH};
                     let now = SystemTime::now().duration_since(UNIX_EPOCH).unwrap();
                     format!("{}.{}", now.as_secs(), now.subsec_micros())
                 });
-
-                // TODO: should we let LSP server to manage and clear diagnostics and remove this entirely?
                 if req.method == "textDocument/didChange" || req.method == "textDocument/didClose" {
-                    // extract uri, wihotut parsing the whole request
                     if let Some(uri) =
                         req.params.get("textDocument").and_then(|td| td.get("uri")).and_then(|uri| uri.as_str())
                     {
-                        self.clear_diagnostics(uri);
+                        self.clear_diagnostics(uri); // clean diagnostics on change/close
                     }
                 }
-                let id = req.id.clone(); // send first, then update
-                self.send_message_raw(msg)?;
+                // always update, even if send will fail. Server could answer fast
                 self.update_request_info(id, request_tick);
             }
-            _ => {
-                // Covers Message::Notification and Message::Response
-                self.send_message_raw(msg)?;
-            }
+            _ => {} // do nothing for Message::Notification and Message::Response
         }
+        self.send_message_raw(msg)?;
         Ok(Some(true))
     }
 

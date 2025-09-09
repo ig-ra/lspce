@@ -50,7 +50,7 @@ use serde::{de::DeserializeOwned, Deserialize, Serialize};
 /// assert!(Message::from_str_typed::<Response>(request_json).is_err(), "Not a Response JSON");
 /// ```
 
-#[derive(Serialize, Deserialize, Debug, Clone)]
+#[derive(Serialize, Deserialize, Debug, Clone, PartialEq)]
 #[serde(untagged)]
 pub enum Message {
     Request(Request),
