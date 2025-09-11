@@ -1,4 +1,4 @@
-use std::{
+use std::{    
     fmt,
     io::{self, BufRead, Read, Write},
 };
@@ -114,7 +114,7 @@ pub struct Request {
     pub params: serde_json::Value,
     #[serde(skip)]
     content: String,
-    #[serde(skip)]
+    #[serde(skip_serializing, default)] // always present from elisp side, not present in real-LSP orginating requests
     pub request_tick: Option<String>,
 }
 
@@ -194,7 +194,8 @@ macro_rules! impl_methods {
 impl_methods!(Request, Response, Notification);
 
 fn display_message<T: Serialize>(f: &mut fmt::Formatter<'_>, value: &T, type_name: &str, content: &str) -> fmt::Result {
-    match serde_json::to_string_pretty(value) {
+    match serde_json::to_string(value) {
+        // or use to_string_pretty
         Ok(pretty) => write!(f, "{} {}", type_name, pretty),
         Err(e) => write!(f, "{} {} {}", type_name, e, content),
     }
@@ -206,24 +207,29 @@ impl Message {
         serde_json::to_string(self)
     }
 
+    const ERR_RESPONSE_XOR: &str = "Response must have either result XOR error";
+    const ERR_MISSING_FIELDS: &str = "Message must have either method or id";
+
     /// Deserialize a Message from a JSON string.
-    pub fn from_str(json: &str) -> anyhow::Result<Message, serde_json::Error> {
+    pub fn from_str(json_str: &str) -> anyhow::Result<Message, serde_json::Error> {
         // Although we could just use serde_json::from_str(json), but then Request could be
         // deserialized as Response or Notification. So let's validate message type manually
-        let value: serde_json::Value = serde_json::from_str(json)?;
+        let json: serde_json::Value = serde_json::from_str(json_str)?;
 
         // Simple detection of message type based on `method' and `id' fields
-        match (value.get("method").is_some(), value.get("id").is_some()) {
-            (true, true) => Ok(Message::Request(serde_json::from_value::<Request>(value)?)),
-            (true, false) => Ok(Message::Notification(serde_json::from_value::<Notification>(value)?)),
+        let mut msg = match (json.get("method").is_some(), json.get("id").is_some()) {
+            (true, true) => Message::Request(serde_json::from_value::<Request>(json)?),
+            (true, false) => Message::Notification(serde_json::from_value::<Notification>(json)?),
             (false, true) => {
-                if value.get("result").is_some() == value.get("error").is_some() {
-                    return Err(SerdeError::custom("Response must have either result XOR error"));
+                if json.get("result").is_some() == json.get("error").is_some() {
+                    return Err(SerdeError::custom(Message::ERR_RESPONSE_XOR));
                 }
-                Ok(Message::Response(serde_json::from_value::<Response>(value)?))
+                Message::Response(serde_json::from_value::<Response>(json)?)
             }
-            (false, false) => Err(SerdeError::custom("Message must have either method or id")),
-        }
+            (false, false) => return Err(SerdeError::custom(Message::ERR_MISSING_FIELDS)),
+        };
+        msg.set_content(json_str.to_string());
+        Ok(msg)
     }
 
     /// Deserialize specific message type from a JSON string.
@@ -285,7 +291,6 @@ impl Message {
             Ok(msg) => msg,
             Err(_) => return Ok(None), // deserialization error
         };
-        msg.set_content(text);
         Ok(Some(msg))
     }
 
@@ -414,114 +419,129 @@ mod tests {
             assert_eq!(serialized, expected_json);
         }
     }
+
     #[test]
-    fn test_msg_deserialization() {
-        let test_cases = [
-            (
-                "request",
-                vec![
-                    (r#""id": 1, "method": "shutdown", "params": null"#, "shutdown"), // null params
-                    (r#""id": "req-abc", "method": "textDocument/hover""#, "textDocument/hover"), // string id, missing params
-                    (r#""id": 42, "method": "workspace_symbol", "params": {}"#, "workspace_symbol"), // empty object params
-                    (r#""id": 999, "method": "custom/method_123", "params": [1,2,3]"#, "custom/method_123"), // array params
-                ],
-            ),
-            (
-                "notification",
-                vec![
-                    (r#""method": "exit", "params": null"#, "exit"), // null params
-                    (r#""method": "initialized""#, "initialized"),   // missing params
-                    (r#""method": "textDocument/didOpen", "params": {"uri": "file://test"}"#, "textDocument/didOpen"), // object params, slash method
-                ],
-            ),
-            (
-                "response",
-                vec![
-                    (r#""id": 1, "result": "success""#, ""),   // success with string result
-                    (r#""id": "resp-2", "result": null"#, ""), // success with explicit null result
-                    // (r#""id": 3"#, ""),                             // implicit null for both result and error - should fail on proto verification
-                    (r#""id": 4, "result": {}"#, ""), // success with empty result
-                    (r#""id": 5, "result": {"status": "ok"}"#, ""), // success with data
-                    (r#""id": 6, "error": null"#, ""), // explicit null error
-                    (r#""id": 8, "error": {"code": -1, "message": "err1"}"#, ""), // error with no data
-                    (r#""id": 9, "error": {"code": -2, "message": "err2", "data": {}}"#, ""), // error with empty data
-                    (r#""id": 10, "error": {"code": -2, "message": "err2", "data": {"k":"v"}}"#, ""), // error with some data
-                ],
-            ),
+    fn test_msg_request_deserialization() {
+        let test_cases = vec![
+            (r#"{"id": 1, "method": "shutdown", "params": null}"#, "shutdown", None), // null params
+            (r#"{"id": "req-abc", "method": "textDocument/hover"}"#, "textDocument/hover", None), // string id, missing params
+            (r#"{"id": 42, "method": "workspace_symbol", "params": {}}"#, "workspace_symbol", None), // empty object params
+            (r#"{"id": 999, "method": "custom/method_123", "params": [1,2,3]}"#, "custom/method_123", None), // array params
+            (r#"{"id": "s12", "method": "custom", "request_tick":"123"}"#, "custom", Some("123".to_string())), // with request_tick
+            (r#"{"id": 2, "method": "m1", "request_tick":"456", "extra":[]}"#, "m1", Some("456".to_string())), // with extra field
         ];
 
-        for (msg_type, cases) in test_cases {
-            for (json_fields, expected) in cases {
-                let full_json_str = format!(r#"{{"jsonrpc": "2.0", {}}}"#, json_fields);
-
-                let lsp_message = format!("Content-Length: {}\r\n\r\n{}", full_json_str.len(), full_json_str);
-                let mut cursor = std::io::Cursor::new(lsp_message.as_bytes());
-                let msg = Message::read(&mut cursor).unwrap().unwrap();
-
-                assert_eq!(msg.content(), &full_json_str, "Content should contain original JSON");
-
-                match (msg_type, &msg) {
-                    ("request", Message::Request(req)) => {
-                        assert_eq!(req.method, expected, "Request method mismatch for: {}", json_fields);
-                    }
-
-                    ("notification", Message::Notification(notif)) => {
-                        assert_eq!(notif.method, expected, "Notification method mismatch for: {}", json_fields);
-                    }
-
-                    ("response", Message::Response(resp)) => {
-                        // convert input json to expected result and error
-                        let json: serde_json::Value = serde_json::from_str(&full_json_str).unwrap();
-
-                        let extract_expected = |key: &str| match json.get(key) {
-                            None => None,
-                            Some(v) if v.is_null() => None,
-                            Some(v) => Some(v.clone()),
-                        };
-                        let expected_result = extract_expected("result");
-                        let expected_error = extract_expected("error")
-                            .and_then(|v| serde_json::from_value::<ResponseError>(v.clone()).ok());
-
-                        fn compare_fields<T>(
-                            actual: &Option<T>, expected: &Option<T>, field_name: &str, json_fields: &str,
-                        ) where
-                            T: PartialEq + std::fmt::Debug,
-                        {
-                            match (actual, expected) {
-                                (None, None) => {} // ok. Both are None
-                                (Some(actual), Some(expected)) => {
-                                    assert_eq!(actual, expected, "{} mismatch for: {}", field_name, json_fields);
-                                }
-                                _ => panic!(
-                                    "{} mismatch for: {} | actual={:?}, expected={:?}",
-                                    field_name, json_fields, actual, expected
-                                ),
-                            }
-                        }
-
-                        compare_fields(&resp.result, &expected_result, "Result", json_fields);
-                        compare_fields(&resp.error, &expected_error, "Error", json_fields);
-                    }
-                    _ => panic!("Type mismatch for {} | {} {}", json_fields, msg_type, &msg),
+        for (json_str, method, tick) in test_cases {
+            let msg = Message::from_str(json_str).expect("Msg from str");
+            let json: serde_json::Value = serde_json::from_str(json_str).expect("Serde JSON from str");
+            match (msg.msg_type(), &msg) {
+                ("Request", Message::Request(req)) => {
+                    assert_eq!(req.method, method);
+                    assert_eq!(req.request_tick, tick);
+                    let expected_id: RequestId = serde_json::from_value(json.get("id").unwrap().clone()).unwrap();
+                    assert_eq!(req.id, expected_id, "ID should match");
+                    let expected_params = json.get("params").unwrap_or_default();
+                    assert_eq!(&req.params, expected_params);
                 }
+                (t, _) => panic!("Should be Request (got {} <{}>)", t, msg),
             }
+            assert_eq!(msg.content(), json_str, "Content should contain original JSON");
         }
     }
 
     #[test]
-    fn test_from_str() {
+    fn test_msg_notification_deserialization() {
+        let test_cases = vec![
+            (r#"{"method": "exit", "params": null}"#, "exit"), // null params
+            (r#"{"method": "initialized"}"#, "initialized"),   // missing params
+            (r#"{"method": "textDocument/didOpen", "params": {"uri": "file://test"}}"#, "textDocument/didOpen"), // object params, slash method
+            (r#"{"method": "extra", "extra":1}"#, "extra"), // extra fields
+        ];
+
+        for (json_str, method) in test_cases {
+            let msg = Message::from_str(json_str).expect("Msg from string");
+            let json: serde_json::Value = serde_json::from_str(json_str).expect("Serde JSON from str");
+            match (msg.msg_type(), &msg) {
+                ("Notification", Message::Notification(notif)) => {
+                    assert_eq!(notif.method, method);
+                    let expected_params = json.get("params").unwrap_or_default();
+                    assert_eq!(&notif.params, expected_params);
+                }
+                (t, _) => panic!("Should be Request (got {} <{}>)", t, msg),
+            }
+            assert_eq!(msg.content(), json_str, "Content should contain original JSON");
+        }
+    }
+
+    #[test]
+    fn test_msg_response_deserialization() {
+        let test_cases = vec![
+            (r#"{"id": 1, "result": "success"}"#),        // success with string result
+            (r#"{"id": "resp-2", "result": null}"#),      // success with explicit null result
+            (r#"{"id": 4, "result": {}}"#),               // success with empty result
+            (r#"{"id": 5, "result": {"status": "ok"}}"#), // success with data
+            (r#"{"id": 6, "error": null}"#),              // explicit null error
+            (r#"{"id": 8, "error": {"code": -1, "message": "err1"}}"#), // error with no data
+            (r#"{"id": 9, "error": {"code": -2, "message": "err2", "data": {}}}"#), // error with empty data
+            (r#"{"id": 10, "error": {"code": -2, "message": "err2", "data": {"k":"v"}}}"#), // error with some data
+            (r#"{"id": 1, "result": "extra", "foo":"bar"}"#), // extra fields
+        ];
+
+        for (json_str) in test_cases {
+            let msg = Message::from_str(json_str).unwrap();
+            let json: serde_json::Value = serde_json::from_str(json_str).expect("Serde JSON from str");
+            match (msg.msg_type(), &msg) {
+                ("Response", Message::Response(resp)) => {
+                    let expected_id: RequestId = serde_json::from_value(json.get("id").unwrap().clone()).unwrap();
+                    assert_eq!(resp.id, expected_id, "ID should match");
+
+                    // convert input json to expected result and error
+                    let extract_expected = |key: &str| match json.get(key) {
+                        None => None,
+                        Some(v) if v.is_null() => None,
+                        Some(v) => Some(v.clone()),
+                    };
+                    let expected_result = extract_expected("result");
+                    let expected_error =
+                        extract_expected("error").and_then(|v| serde_json::from_value::<ResponseError>(v.clone()).ok());
+
+                    assert_eq!(resp.result, expected_result, "Result should match");
+                    assert_eq!(resp.error, expected_error, "Error should match");
+                }
+                (t, _) => panic!("Should be Response (got {} <{}>)", t, msg),
+            }
+            assert_eq!(msg.content(), json_str, "Content should contain original JSON");
+        }
+    }
+
+    #[test]
+    fn test_msg_deserialization_err() {
+        let test_cases = vec![
+            (r#"{"id": 3}"#, Message::ERR_RESPONSE_XOR), // Response - implicit null for both result and error
+            (r#"{"foo": "bar"}"#, Message::ERR_MISSING_FIELDS), // Message should have either method or id
+        ];
+
+        for (json_str, expected_err) in test_cases {
+            let err = Message::from_str(json_str).expect_err("Msg from str should fail");
+            assert!(err.to_string().contains(expected_err), "Error should be: {}", expected_err);
+        }
+    }
+
+    #[test]
+    /// Test sring to Message conversion and proper type detection
+    fn test_msg_type_via_from_str() {
         let test_cases = [
             (r#"{"id": 1, "method": "shutdown"}"#, "Request"),
-            (r#"{"id": 1, "result": "success"}"#, "Response"),
-            (r#"{"id": 3, "error": {"code": -1, "message": "test"}}"#, "Response"),
+            (r#"{"id": 2, "method": "custom", "request_tick": "12345"}"#, "Request"),
+            (r#"{"id": 3, "result": "success"}"#, "Response"),
+            (r#"{"id": 4, "error": {"code": -1, "message": "test"}}"#, "Response"),
             (r#"{"method": "exit"}"#, "Notification"),
         ];
 
         for (json, expected_type) in test_cases {
-            // always succeed to create a Message from a valid json. Ensure expected type
-            let message =
-                Message::from_str(json).expect(&format!("from_str should succeed for valid msg json: {}", json));
-            assert_eq!(message.msg_type(), expected_type, "from_str should return {} for: {}", expected_type, json);
+            // always succeed on creating a Message from a valid json. Ensure expected type
+            let message = Message::from_str(json).expect(&format!("Msg from str should succeed: {}", json));
+            assert_eq!(message.msg_type(), expected_type, "Msg type should be {} for: {}", expected_type, json);
 
             // Try to parse to specific types. Succeed only for expected one
             for (type_name, result_ok) in [
@@ -643,10 +663,10 @@ mod tests {
     #[test]
     fn test_message_read() {
         /// valid and invalid cases for Message::read.
-        /// invalid, but recoverable cases should return Ok(None),
-        /// while unrecoverable cases should result in Err (e.g. unexpectedEof)
+        /// - invalid, but recoverable cases should return Ok(None),
+        /// - while unrecoverable cases should result in Err (e.g. unexpectedEof)
         let cases = [
-            // // Valid message
+            // Valid ---------------------------------------------------------v
             TestCase {
                 name: "Valid Message / Notification",
                 input: b"Content-Length: 17\r\n\r\n{\"method\":\"exit\"}",
