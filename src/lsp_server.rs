@@ -1,4 +1,5 @@
 use crate::{
+    bounded_queue::VecDequeExt,
     logger::{self, Logger},
     msg::{Message, Notification, Request, RequestId, Response},
     stdio::{IoThreads, ThreadResult},
@@ -67,20 +68,6 @@ pub enum ServerStatus {
     ShuttingDown = 2,
     Exiting = 3,
     TearingDown = 4,
-}
-
-pub trait VecDequeExt<T> {
-    /// Push new values keeping the capacity. If capacity is reached, evict the oldest item.
-    fn bounded_push_back(&mut self, item: T);
-}
-
-impl<T> VecDequeExt<T> for VecDeque<T> {
-    fn bounded_push_back(&mut self, item: T) {
-        if self.len() >= self.capacity() {
-            self.pop_front(); // Evict oldest
-        }
-        self.push_back(item);
-    }
 }
 
 pub(crate) struct LspServerData {

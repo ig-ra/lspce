@@ -1,5 +1,6 @@
 #![allow(unused)]
 
+mod bounded_queue;
 mod bufext;
 mod connection;
 mod env;
