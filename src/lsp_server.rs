@@ -467,7 +467,7 @@ impl LspServer {
         result
     }
 
-    pub fn read_notification(&self) -> Option<Notification> {
+    pub fn read_last_notification(&self) -> Option<Notification> {
         let mut server_data = self.server_data.lock().unwrap();
         server_data.notifications.pop_front()
     }

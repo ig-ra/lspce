@@ -413,7 +413,7 @@ fn read_response_exact(
 #[defun_safe]
 #[defun]
 fn read_notification(env: &Env, root_uri: String, file_type: String) -> EmacsResult<Option<String>> {
-    with_server(&root_uri, &file_type, true, |server| Ok(server.read_notification().map(|r| r.into_string())))
+    with_server(&root_uri, &file_type, true, |server| Ok(server.read_last_notification().map(|n| n.into_string())))
 }
 
 #[defun_safe]
