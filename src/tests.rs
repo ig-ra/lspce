@@ -1,13 +1,43 @@
 use super::*;
 
+// handy for manual testing and to see log messages
+pub fn setup_test_logger() {
+    #[cfg(unix)]
+    logger::set_log_file_name("/dev/stderr".to_string());
+
+    logger::enable_logging();
+}
+
+fn mock_server() -> (LspServer, Receiver<Message>, Sender<Message>) {
+    use ThreadResult::NotJoined;
+
+    let (s_lsp, r_emacs) = crossbeam_channel::unbounded::<Message>();
+    let (s_emacs, r_lsp) = crossbeam_channel::unbounded::<Message>();
+
+    let server = LspServer {
+        resources: Resources {
+            child: None,
+            transport: None,
+            dispatcher: None,
+            state: ResourceState { transport: [NotJoined, NotJoined, NotJoined], exit: None },
+        },
+        server_info: LspServerInfo::new(123),
+        status: AtomicServerStatus::new(ServerStatus::Running),
+        sender: Some(s_emacs),
+        server_data: Arc::new(Mutex::new(LspServerData::new())),
+        exit: Arc::new(AtomicBool::new(false)),
+        name_id: "mock_server".to_string(),
+    };
+    (server, r_lsp, s_lsp)
+}
 
 mod test_lspserver_new {
     use super::LspServer;
     use std::io;
 
-    #[cfg(unix)]
+    #[cfg(unix)] // using echo/true
     #[test]
-    fn test_lsp_server_new_valid_scenarios() {
+    fn test_lsp_server_new_valid_schenarios() {
         let test_cases = vec![
             ("true", "", "", "no args and empty envs"),
             ("echo", "something", "", "cmd with args"),
@@ -19,9 +49,9 @@ mod test_lspserver_new {
 
             // May return spawn error on non-linux systems (due to presence of echo/true),
             // but should not return JSON parsing error.
-            if let Err(e) = &res {
-                if !matches!(e.downcast_ref::<io::Error>(), Some(err) if err.kind() == io::ErrorKind::NotFound) {
-                    panic!("Test '{}' failed. Unexpected error: {:?}", description, e);
+            if let Err(err) = &res {
+                if !matches!(err.downcast_ref::<io::Error>(), Some(e) if e.kind() == io::ErrorKind::NotFound) {
+                    panic!("Test '{description}' failed. Unexpected error: {err}");
                 }
             }
         }
@@ -36,19 +66,54 @@ mod test_lspserver_new {
 
         for (cmd, envs, error_str, description) in test_cases {
             let res = LspServer::new(cmd, "", envs);
-            assert!(res.is_err(), "Test '{}' should return an error", description);
-            //let err = res.err().unwrap();
+            assert!(res.is_err(), "Test '{description}' should return an error");
             assert!(matches!(res, Err(ref e) if e.to_string().contains(error_str)));
         }
     }
 }
 
-// handy for manual testing and to see log messages
-pub fn setup_test_logger() {
-    #[cfg(unix)]
-    logger::set_log_file_name("/dev/stderr".to_string());
+#[cfg(test)]
+mod test_lspserver_initialize {
+    use super::*;
+    use lsp_types::{InitializeResult, InitializedParams, ServerCapabilities, ServerInfo};
+    use test_utils::*;
 
-    logger::enable_logging();
+    #[test]
+    fn test_initialize_success() {
+        let (mut server, r_lsp, s_lsp) = mock_server();
+        let server_data = Arc::clone(&server.server_data);
+
+        let init_params = InitializedParams {};
+        let init_req = Request::new("initialize", "initialize", Some(init_params)).expect("Bad init request");
+        let req_id = init_req.id.clone();
+
+        let mut server_info = LspServerInfo::new(123); // the same as mock id
+        server_info.info.name = "fake".to_string();
+        let si = server_info.info.clone(); // clone lsp_types::ServerInfo to move to thread
+
+        // Simulate the LSP server's response in a separate thread
+        let lsp_thread = std::thread::spawn(move || {
+            // assert fake LSP got INITIALIZE request
+            let init_msg = r_lsp.recv_timeout(ONE_SEC).expect("Did not get INITIALIZE message");
+            assert!(matches!(init_msg, Message::Request(req) if req.id == req_id && req.method == "initialize"));
+
+            // send response with init results back (i.e. push directly to server_data)
+            let init_result = InitializeResult { capabilities: ServerCapabilities::default(), server_info: Some(si) };
+            let init_resp = Response::new_ok(req_id, Some(init_result)).expect("Bad init response");
+            server_data.lock().unwrap().responses_unticked.push_back(init_resp);
+
+            // assert fake LSP gets the INITIALIZED notification
+            let init_notif = r_lsp.recv_timeout(ONE_SEC).expect("Did not get INITIALIZED notification");
+            assert!(matches!(init_notif, Message::Notification(notif) if notif.method == "initialized"));
+        });
+
+        // test initialize() and compare server_info
+        let res = server.initialize(init_req, TWO_SECS).expect("Initialize should succeed");
+        assert_eq!(server.status(), ServerStatus::Running, "Server status should be RUNNING");
+        assert_eq!(server.server_info, server_info, "Server info should be updated");
+
+        lsp_thread.join().expect("LSP thread panicked");
+    }
 }
 
 /// Tests spawining real CMDs on linux and their exit statuses and signals. Mocking child is overkill
@@ -118,29 +183,6 @@ mod test_shutdown_with_real_cmd_as_fake_lspserver {
     }
 }
 
-fn mock_server() -> (LspServer, Receiver<Message>, Sender<Message>) {
-    use ThreadResult::NotJoined;
-
-    let (s_lsp, r_emacs) = crossbeam_channel::unbounded::<Message>();
-    let (s_emacs, r_lsp) = crossbeam_channel::unbounded::<Message>();
-
-    let server = LspServer {
-        resources: Resources {
-            child: None,
-            transport: None,
-            dispatcher: None,
-            state: ResourceState { transport: [NotJoined, NotJoined, NotJoined], exit: None },
-        },
-        server_info: LspServerInfo::new(1),
-        status: AtomicServerStatus::new(ServerStatus::Running),
-        sender: Some(s_emacs),
-        server_data: Arc::new(Mutex::new(LspServerData::new())),
-        exit: Arc::new(AtomicBool::new(false)),
-        name_id: "mock_server".to_string(),
-    };
-    (server, r_lsp, s_lsp)
-}
-
 #[cfg(test)]
 mod test_lspserver_shutdown_with_mock {
     use super::*;
@@ -155,21 +197,21 @@ mod test_lspserver_shutdown_with_mock {
 
         // Simulate the LSP server's in a separate thread
         let lsp_thread = std::thread::spawn(move || {
-            // 1. Assert that the LSP get the SHUTDOWN request
+            // assert fake LSP got the SHUTDOWN request
             let shutdown_msg = r_lsp.recv_timeout(ONE_SEC).expect("Did not get SHUTDOWN message");
             assert!(matches!(shutdown_msg, Message::Request(req) if req.id == req_id && req.method == "shutdown"));
-            // 2. Send response back (push directly to server_data)
+
+            // send response back (e.g. push directly to server_data)
             let shutdown_resp = Response::new_ok(req_id, None::<bool>).unwrap();
             server_data.lock().unwrap().responses_unticked.push_back(shutdown_resp);
 
-            // 3. Assert that the LSP get the final EXIT notification.
+            // assert fake LSP get the final EXIT notification.
             let exit_msg = r_lsp.recv_timeout(ONE_SEC).expect("Did not get EXIT message");
             assert!(matches!(exit_msg, Message::Notification(notif) if notif.method == "exit"));
         });
 
-        // test shutdown logic and assert that shutdown protocol succeeded.
-        let res = server.shutdown(shutdown_req, TWO_SECS);
-        assert!(res.is_ok(), "Shutdown should succeed vs {:?}", res);
+        // test shutdown() logic and assert the status
+        let res = server.shutdown(shutdown_req, TWO_SECS).expect("Shutdown should succeed");
         assert_eq!(server.status(), ServerStatus::Exiting, "Server status should be EXITING");
 
         lsp_thread.join().expect("LSP thread panicked");
@@ -180,7 +222,7 @@ mod test_lspserver_shutdown_with_mock {
         let (mut server, r_lsp, s_lsp) = mock_server();
         let shutdown_req = Request::new_shutdown();
 
-        // Run the shutdown logic, but provide no response. Use short timeout as well.
+        // Run the shutdown() logic, but provide no response. Use short timeout as well.
         let result = server.shutdown(shutdown_req, Duration::from_millis(50));
         assert!(
             matches!(result, Err(ref e) if e.downcast_ref::<io::Error>().unwrap().kind() == io::ErrorKind::TimedOut),
@@ -211,7 +253,6 @@ mod test_lspserver_teardown {
 
     #[test]
     fn test_teardown_single_entry() {
-        // Create a dummy LspServer (you may need to mock or simplify construction)
         let mut server = LspServer::new("true", "", "{}").unwrap();
         let server = Arc::new(std::sync::Mutex::new(server));
 
@@ -221,7 +262,7 @@ mod test_lspserver_teardown {
             handles.push(thread::spawn(move || server.lock().unwrap().teardown(Duration::ZERO)));
         }
 
-        // ge all results.
+        // gather all threads results
         let results: Vec<_> = handles.into_iter().map(|h| h.join().unwrap()).collect();
 
         let enter_count = results.iter().filter(|r| matches!(r, Ok(Some(_)))).count();
