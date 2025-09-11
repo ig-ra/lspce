@@ -1,14 +1,13 @@
 use crate::{
     logger::{self, Logger},
     msg::{Message, Notification, Request, RequestId, Response},
-    name_id,
     stdio::{IoThreads, ThreadResult},
     utils::{kill_child_and_wait_with_timeout, wait_child_with_timeout},
     GRACEFUL_SHUTDOWN_TIMEOUT, KILL_WAIT_TIMEOUT, MAX_DIAGNOSTICS_COUNT, MAX_NONTICKED_RESPONSES, MAX_NOTIFICATIONS,
     MAX_TICKED_RESPONSES, POLL_INTERVAL,
 };
 
-use anyhow::{anyhow, Context};
+use anyhow::{anyhow, bail, Context};
 use atomic_enum::atomic_enum;
 use crossbeam_channel::{Receiver, Sender};
 use emacs::Result as EmacsResult;
@@ -149,6 +148,10 @@ pub struct LspServer {
     pub(crate) name_id: String,
 }
 
+fn name_id(name: &str, id: &str) -> String {
+    format!("<{}:[{}]>", name, id)
+}
+
 impl LspServer {
     pub fn set_status(&self, status: ServerStatus) {
         self.status.store(status, Ordering::SeqCst);
@@ -211,9 +214,45 @@ impl LspServer {
         Ok(server)
     }
 
+    pub fn initialize(&mut self, mut req: Request, timeout: Duration) -> EmacsResult<()> {
+        req.request_tick = None; // just ensure that we are not sending tick for initialize request from esisp
+        let req_id = req.id.clone();
+        self.send_message(req)?;
+
+        let start_time = Instant::now();
+        loop {
+            if let Some(response) = self.read_response_unticked(&req_id) {
+                if let Some(error) = &response.error {
+                    bail!("Failed to initialize - LSP server error {:?}", error);
+                }
+
+                let ir: InitializeResult = serde_json::from_value(
+                    response.result.context("Failed to initialize - empty initialize response")?,
+                )?;
+                self.send_message(Notification::new_params("initialized", InitializedParams {})?)?;
+
+                self.server_info.capabilities = serde_json::to_string(&ir.capabilities)?;
+                if let Some(si) = ir.server_info {
+                    self.server_info.name = si.name;
+                    self.name_id = name_id(&self.server_info.name, &self.server_info.id);
+                    self.server_info.version = si.version.unwrap_or_default();
+                }
+                self.set_status(ServerStatus::Running);
+
+                return Ok(());
+            }
+
+            if !timeout.is_zero() && start_time.elapsed() > timeout {
+                bail!("Failed to initializing - timeout");
+            }
+
+            thread::sleep(POLL_INTERVAL);
+        }
+    }
+
     /// Tears down and cleanup LSP child process and associated threads
     ///
-    /// 1. Set exit and dtop sender to signal the dispatcher and transport threads to stop
+    /// 1. Set exit flag and drop sender to signal the dispatcher and transport threads to stop
     /// 2. Gracefully wait for the child LSP process to exit, if provided graceful timeout is non-zero
     /// 4. If the child process does not exit within the provided timeout, or error occured, or
     ///    no graceful timeout provided kill the child the process

@@ -69,10 +69,6 @@ static MAX_DIAGNOSTICS_COUNT: AtomicI32 = AtomicI32::new(30);
 
 const REAPER_INTERVAL: Duration = Duration::from_secs(5);
 
-pub(crate) fn name_id(name: &str, id: &str) -> String {
-    format!("<{}:[{}]>", name, id)
-}
-
 pub struct Project {
     pub root_uri: String, // root URI of the project, e.g. "file:///home/user/project"
     pub servers: HashMap<String, Option<LspServer>>, // map each language_id to a lsp server
@@ -283,11 +279,11 @@ fn connect(
     Logger::debug(format!("API: Initialize Request {:#?}", initialize_req_str));
     let req = Message::from_str_typed::<Request>(&initialize_req_str)?;
 
-    initialize(env, &mut server, req, Duration::from_secs(timeout.max(0) as u64))
-        .inspect_err(|_| {
-            let _ = server.teardown(Duration::ZERO); // forcibly kill server and join threads
-        })
-        .with_context(|| format!("Failed to initialize LSP server for {}", prj_name_type))?;
+    let res = server.initialize(req, Duration::from_secs(timeout.max(0) as u64));
+    if let Err(ref e) = res {
+        let _ = server.teardown(Duration::ZERO); // forcibly kill server and join threads
+        res.with_context(|| format!("Failed to initialize LSP server for {}", prj_name_type))?;
+    }
 
     let server_info = server.server_info.clone();
 
@@ -297,40 +293,6 @@ fn connect(
 
     Logger::info(format!("Connected to server successfully. server capabilities {}", &server_info.capabilities));
     Ok(Some(server_info.to_json_string()?))
-}
-
-pub fn initialize(env: &Env, server: &mut LspServer, mut req: Request, timeout: Duration) -> EmacsResult<()> {
-    req.request_tick = None; // just ensure that we are not sending tick for initialize request from esisp
-    let req_id = req.id.clone();
-    server.send_message(req)?;
-
-    let start_time = Instant::now();
-    loop {
-        if let Some(response) = server.read_response_unticked(&req_id) {
-            if let Some(error) = &response.error {
-                bail!("LSP error: {:?}", error);
-            }
-
-            let ir: InitializeResult = serde_json::from_value(response.result.context("Empty initialize response")?)?;
-            server.send_message(Notification::new_params("initialized", InitializedParams {})?)?;
-
-            server.server_info.capabilities = serde_json::to_string(&ir.capabilities)?;
-            if let Some(si) = ir.server_info {
-                server.server_info.name = si.name;
-                server.name_id = name_id(&server.server_info.name, &server.server_info.id);
-                server.server_info.version = si.version.unwrap_or_default();
-            }
-            server.set_status(ServerStatus::Running);
-
-            return Ok(());
-        }
-
-        if !timeout.is_zero() && start_time.elapsed() > timeout {
-            bail!("Timeout while initializing LSP server");
-        }
-
-        thread::sleep(POLL_INTERVAL);
-    }
 }
 
 /// Orchestrates the server shutdown sequence. Intended to be run in a background thread.
