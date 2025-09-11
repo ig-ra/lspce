@@ -4,7 +4,8 @@ use crate::{
     name_id,
     stdio::{IoThreads, ThreadResult},
     utils::{kill_child_and_wait_with_timeout, wait_child_with_timeout},
-    GRACEFUL_SHUTDOWN_TIMEOUT, KILL_WAIT_TIMEOUT, MAX_DIAGNOSTICS_COUNT, MAX_NOTIFICATIONS, POLL_INTERVAL,
+    GRACEFUL_SHUTDOWN_TIMEOUT, KILL_WAIT_TIMEOUT, MAX_DIAGNOSTICS_COUNT, MAX_NONTICKED_RESPONSES, MAX_NOTIFICATIONS,
+    MAX_TICKED_RESPONSES, POLL_INTERVAL,
 };
 
 use anyhow::{anyhow, Context};
@@ -69,8 +70,22 @@ pub enum ServerStatus {
     TearingDown = 4,
 }
 
+pub trait VecDequeExt<T> {
+    /// Push new values keeping the capacity. If capacity is reached, evict the oldest item.
+    fn bounded_push_back(&mut self, item: T);
+}
+
+impl<T> VecDequeExt<T> for VecDeque<T> {
+    fn bounded_push_back(&mut self, item: T) {
+        if self.len() >= self.capacity() {
+            self.pop_front(); // Evict oldest
+        }
+        self.push_back(item);
+    }
+}
+
 pub(crate) struct LspServerData {
-    latest_request_tick: String,
+    pub(crate) latest_request_tick: String,
     latest_response_id: RequestId,
     latest_response_tick: String,
     pub(crate) request_ticks: HashMap<RequestId, String>,
@@ -78,7 +93,8 @@ pub(crate) struct LspServerData {
     pub(crate) file_infos: HashMap<String, FileInfo>,
 
     // requests: VecDeque<Request>, // REVIEW: unused?
-    pub(crate) responses: VecDeque<Response>,
+    pub(crate) responses: VecDeque<Response>,          // ticked
+    pub(crate) responses_unticked: VecDeque<Response>, // non-ticked
     notifications: VecDeque<Notification>,
 }
 
@@ -92,7 +108,9 @@ impl LspServerData {
             file_infos: HashMap::new(),
 
             // requests: VecDeque::new(), // REVIEW: unused?
-            responses: VecDeque::new(),
+            responses: VecDeque::with_capacity(MAX_TICKED_RESPONSES),
+            responses_unticked: VecDeque::with_capacity(MAX_NONTICKED_RESPONSES),
+
             notifications: VecDeque::new(),
         }
     }
@@ -276,16 +294,17 @@ impl LspServer {
     /// # Returns
     /// * Ok if the protocol handshake completed successfully within the timeout.
     /// * Err if the handshake failed or timed out.
-    pub fn shutdown(&mut self, req: Request, timeout: Duration) -> EmacsResult<()> {
+    pub fn shutdown(&mut self, mut req: Request, timeout: Duration) -> EmacsResult<()> {
         self.set_status(ServerStatus::ShuttingDown);
         Logger::info(format!("Starting shutdown protocol for {}", self.name_id));
-        let req_id = req.id.clone();
 
+        req.request_tick = None; // ensure there is no tick for shutdown request
+        let req_id = req.id.clone();
         self.send_message(req)?;
 
         let start_time = Instant::now();
         while start_time.elapsed() <= timeout {
-            if matches!(self.read_response(), Some(ref resp) if resp.id == req_id) {
+            if self.read_response_unticked(&req_id).is_some() {
                 self.send_message(Notification::new("exit"))?;
                 self.set_status(ServerStatus::Exiting);
                 Logger::info(format!("Shutdown protocol finished for {}", self.name_id));
@@ -312,6 +331,7 @@ impl LspServer {
                 match msg {
                     Message::Request(r) => {
                         // REVIEW: unused? read_requests() is reading, but there is no API to call read_requests
+                        // How should we handle server initiated requests to lspce?
 
                         // if r.method == "workspace/configuration" {
                         //     let mut server_data = server_data.lock().unwrap();
@@ -327,7 +347,7 @@ impl LspServer {
                             Logger::debug(format!("Request tick for id {} is {}", id, request_tick));
                             if request_tick == server_data.latest_request_tick {
                                 r.request_tick = request_tick.clone();
-                                server_data.responses.push_back(r);
+                                server_data.responses.bounded_push_back(r);
                             }
                             // FIXME: what about String ids? how we define order?
                             if server_data.latest_response_id < id {
@@ -339,10 +359,9 @@ impl LspServer {
                                 ));
                             }
                         } else {
+                            // TODO: should we limit this only to `shutdown` and `initialize` responses?
                             Logger::trace(format!("No request tick for id {}", id));
-                            // if server_data.latest_response_id.lt(&id) {
-                            //     server_data.latest_response_id = id.clone();
-                            // }
+                            server_data.responses_unticked.bounded_push_back(r);
                         }
                     }
                     Message::Notification(r) => {
@@ -416,14 +435,7 @@ impl LspServer {
     pub fn send_message<M: Into<Message>>(&self, msg: M) -> EmacsResult<Option<bool>> {
         let msg = msg.into();
         match &msg {
-            Message::Request(req) => {
-                // FIXME: need to handle server initiated requests too
-                // what to do with tick?
-                let request_tick = req.request_tick.as_ref().map(|s| s.clone()).unwrap_or_else(|| {
-                    use std::time::{SystemTime, UNIX_EPOCH};
-                    let now = SystemTime::now().duration_since(UNIX_EPOCH).unwrap();
-                    format!("{}.{}", now.as_secs(), now.subsec_micros())
-                });
+            Message::Request(req) if req.request_tick.is_some() => {
                 if req.method == "textDocument/didChange" || req.method == "textDocument/didClose" {
                     if let Some(uri) =
                         req.params.get("textDocument").and_then(|td| td.get("uri")).and_then(|uri| uri.as_str())
@@ -431,8 +443,8 @@ impl LspServer {
                         self.clear_diagnostics(uri); // clean diagnostics on change/close
                     }
                 }
-                // always update, even if send will fail. Server could answer fast
-                self.update_request_info(id, request_tick);
+                // always update, even if send will fail. Server could answer faster than our handling of send/then update
+                self.update_request_info(req.id.clone(), req.request_tick.as_ref().unwrap().clone());
             }
             _ => {} // do nothing for Message::Notification and Message::Response
         }
@@ -445,7 +457,18 @@ impl LspServer {
         server_data.responses.pop_front()
     }
 
-    //
+    // find matching response by id, discard/remove non-matching ones
+    pub fn read_response_unticked(&self, id: &RequestId) -> Option<Response> {
+        let mut server_data = self.server_data.lock().unwrap();
+        while let Some(response) = server_data.responses_unticked.pop_front() {
+            if &response.id == id {
+                return Some(response);
+            }
+            // Discard non-matching responses
+        }
+        None
+    }
+
     pub fn read_response_exact(&self, id: RequestId, method: impl AsRef<str>) -> Option<Response> {
         let mut result: Option<Response> = None;
         let mut server_data = self.server_data.lock().unwrap();

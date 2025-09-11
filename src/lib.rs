@@ -59,6 +59,8 @@ pub use stdio::ThreadResult;
 use utils::*;
 
 const MAX_NOTIFICATIONS: usize = 10;
+const MAX_NONTICKED_RESPONSES: usize = 10; // responses for which ticks are not expected, e.g. not via lspce API
+const MAX_TICKED_RESPONSES: usize = 50; // responses for requests sent via lspce API
 const KILL_WAIT_TIMEOUT: Duration = Duration::from_secs(2);
 const GRACEFUL_SHUTDOWN_TIMEOUT: Duration = Duration::from_secs(3);
 const POLL_INTERVAL: Duration = Duration::from_millis(10);
@@ -280,6 +282,7 @@ fn connect(
 
     Logger::debug(format!("API: Initialize Request {:#?}", initialize_req_str));
     let req = Message::from_str_typed::<Request>(&initialize_req_str)?;
+
     initialize(env, &mut server, req, Duration::from_secs(timeout.max(0) as u64))
         .inspect_err(|_| {
             let _ = server.teardown(Duration::ZERO); // forcibly kill server and join threads
@@ -296,12 +299,14 @@ fn connect(
     Ok(Some(server_info.to_json_string()?))
 }
 
-pub fn initialize(env: &Env, server: &mut LspServer, req: Request, timeout: Duration) -> EmacsResult<()> {
+pub fn initialize(env: &Env, server: &mut LspServer, mut req: Request, timeout: Duration) -> EmacsResult<()> {
+    req.request_tick = None; // just ensure that we are not sending tick for initialize request from esisp
+    let req_id = req.id.clone();
     server.send_message(req)?;
 
     let start_time = Instant::now();
     loop {
-        if let Some(response) = server.read_response() {
+        if let Some(response) = server.read_response_unticked(&req_id) {
             if let Some(error) = &response.error {
                 bail!("LSP error: {:?}", error);
             }

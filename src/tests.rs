@@ -188,14 +188,14 @@ mod test_lspserver_shutdown_with_mock {
         // Simulate the LSP server's in a separate thread
         let lsp_thread = std::thread::spawn(move || {
             // 1. Assert that the LSP get the SHUTDOWN request
-            let shutdown_msg = r_lsp.recv_timeout(ONE_SEC).expect("Did not get SHUTDOWN");
+            let shutdown_msg = r_lsp.recv_timeout(ONE_SEC).expect("Did not get SHUTDOWN message");
             assert!(matches!(shutdown_msg, Message::Request(req) if req.id == req_id && req.method == "shutdown"));
             // 2. Send response back (push directly to server_data)
             let shutdown_resp = Response::new_ok(req_id, None::<bool>).unwrap();
-            server_data.lock().unwrap().responses.push_back(shutdown_resp);
+            server_data.lock().unwrap().responses_unticked.push_back(shutdown_resp);
 
             // 3. Assert that the LSP get the final EXIT notification.
-            let exit_msg = r_lsp.recv_timeout(ONE_SEC).expect("Did not get EXIT");
+            let exit_msg = r_lsp.recv_timeout(ONE_SEC).expect("Did not get EXIT message");
             assert!(matches!(exit_msg, Message::Notification(notif) if notif.method == "exit"));
         });
 
