@@ -77,7 +77,7 @@ pub(crate) struct LspServerData {
 
     pub(crate) file_infos: HashMap<String, FileInfo>,
 
-    requests: VecDeque<Request>,
+    // requests: VecDeque<Request>, // REVIEW: unused?
     pub(crate) responses: VecDeque<Response>,
     notifications: VecDeque<Notification>,
 }
@@ -90,7 +90,8 @@ impl LspServerData {
             latest_response_tick: String::new(),
             request_ticks: HashMap::new(),
             file_infos: HashMap::new(),
-            requests: VecDeque::new(),
+
+            // requests: VecDeque::new(), // REVIEW: unused?
             responses: VecDeque::new(),
             notifications: VecDeque::new(),
         }
@@ -310,10 +311,12 @@ impl LspServer {
                 }
                 match msg {
                     Message::Request(r) => {
-                        if r.method == "workspace/configuration" {
-                            let mut server_data = server_data.lock().unwrap();
-                            server_data.requests.push_back(r);
-                        }
+                        // REVIEW: unused? read_requests() is reading, but there is no API to call read_requests
+
+                        // if r.method == "workspace/configuration" {
+                        //     let mut server_data = server_data.lock().unwrap();
+                        //     server_data.requests.push_back(r);
+                        // }
                     }
                     Message::Response(mut r) => {
                         let id = r.id.clone();
@@ -472,10 +475,11 @@ impl LspServer {
         server_data.notifications.pop_front()
     }
 
-    pub fn read_request(&self) -> Option<Request> {
-        let mut server_data = self.server_data.lock().unwrap();
-        server_data.requests.pop_front()
-    }
+    // REVIEW: unused?
+    // pub fn read_request(&self) -> Option<Request> {
+    //     let mut server_data = self.server_data.lock().unwrap();
+    //     server_data.requests.pop_front()
+    // }
 
     pub fn clear_diagnostics(&self, uri: impl AsRef<str>) {
         let mut server_data = self.server_data.lock().unwrap();
