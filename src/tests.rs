@@ -320,4 +320,25 @@ mod test_send_message {
         test_send(Response::new_err("", -1, "fail"));
         test_send(Message::Response(Response::new_err("", -1, "fail")));
     }
+
+#[cfg(test)]
+mod test_bounded_queue {
+    use super::VecDeque;
+    use crate::lsp_server::VecDequeExt;
+
+    #[test]
+    fn test_bounded_push() {
+        let mut queue = VecDeque::with_capacity(2);
+        queue.bounded_push_back(1);
+        queue.bounded_push_back(2);
+        queue.bounded_push_back(3); // should evict 1
+        assert_eq!(queue.len(), 2);
+        assert_eq!(queue.capacity(), 2);
+        assert_eq!(queue.front(), Some(&2));
+        assert_eq!(queue.back(), Some(&3));
+        assert_eq!(queue.pop_front(), Some(2));
+        assert_eq!(queue.pop_front(), Some(3));
+        assert_eq!(queue.len(), 0);
+        assert_eq!(queue.capacity(), 2);
+    }
 }
