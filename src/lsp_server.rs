@@ -14,7 +14,7 @@ use crossbeam_channel::{Receiver, Sender};
 use emacs::Result as EmacsResult;
 use lsp_types::{
     Diagnostic, DidChangeTextDocumentParams, InitializeResult, InitializedParams, PublishDiagnosticsParams,
-    VersionedTextDocumentIdentifier,
+    ServerCapabilities, ServerInfo, VersionedTextDocumentIdentifier,
 };
 use serde::{Deserialize, Serialize};
 use serde_json::json;
@@ -42,17 +42,17 @@ impl FileInfo {
     }
 }
 
-#[derive(Serialize, Deserialize, Debug, Clone)]
+#[derive(Serialize, Deserialize, Debug, Clone, PartialEq)]
 pub struct LspServerInfo {
-    pub name: String,
-    pub version: String,
     pub id: String, // server_id at the moment
-    pub capabilities: String,
+    #[serde(flatten)]
+    pub info: ServerInfo, // name + optional version
+    pub capabilities: ServerCapabilities,
 }
 
 impl LspServerInfo {
     pub fn new(id: u32) -> LspServerInfo {
-        LspServerInfo { name: String::new(), version: String::new(), id: id.to_string(), capabilities: String::new() }
+        LspServerInfo { id: id.to_string(), info: ServerInfo::default(), capabilities: ServerCapabilities::default() }
     }
 
     pub fn to_json_string(&self) -> EmacsResult<String> {
@@ -175,7 +175,7 @@ impl LspServer {
 
         let mut server_info = LspServerInfo::new(child.id());
         if let Some(name) = std::path::Path::new(cmd).file_name().and_then(|n| n.to_str()) {
-            server_info.name = name.to_string();
+            server_info.info.name = name.to_string();
         }
 
         use ThreadResult::NotJoined;
@@ -188,7 +188,7 @@ impl LspServer {
 
         let mut server = LspServer {
             resources,
-            name_id: name_id(&server_info.name, &server_info.id),
+            name_id: name_id(&server_info.info.name, &server_info.id),
             server_info: server_info,
             status: AtomicServerStatus::new(ServerStatus::Starting),
             sender: Some(sender),
@@ -213,19 +213,16 @@ impl LspServer {
                     bail!("Failed to initialize - LSP server error {:?}", error);
                 }
 
-                let ir: InitializeResult = serde_json::from_value(
-                    response.result.context("Failed to initialize - empty initialize response")?,
-                )?;
-                self.send_message(Notification::new_params("initialized", InitializedParams {})?)?;
-
-                self.server_info.capabilities = serde_json::to_string(&ir.capabilities)?;
-                if let Some(si) = ir.server_info {
-                    self.server_info.name = si.name;
-                    self.name_id = name_id(&self.server_info.name, &self.server_info.id);
-                    self.server_info.version = si.version.unwrap_or_default();
+                let init_resp: InitializeResult =
+                    serde_json::from_value(response.result.context("Failed to initialize - bad initialize response")?)?;
+                self.server_info.capabilities = init_resp.capabilities;
+                if let Some(server_info) = init_resp.server_info {
+                    self.server_info.info = server_info;
+                    self.name_id = name_id(&self.server_info.info.name, &self.server_info.id);
                 }
-                self.set_status(ServerStatus::Running);
 
+                self.send_message(Notification::new_params("initialized", InitializedParams {})?)?;
+                self.set_status(ServerStatus::Running);
                 return Ok(());
             }
 

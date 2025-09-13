@@ -292,7 +292,7 @@ fn connect(
         projects.add_server(root_uri, lsp_type, server);
     });
 
-    Logger::info(format!("Connected to server successfully. server capabilities {}", &server_info.capabilities));
+    Logger::info(format!("Connected to server successfully. server capabilities {}", &server_info.to_json_string()?));
     Ok(Some(server_info.to_json_string()?))
 }
 
