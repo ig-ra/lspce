@@ -353,7 +353,8 @@ fn request_async(env: &Env, root_uri: String, file_type: String, json: String) -
     with_server(&root_uri, &file_type, true, |server| {
         Logger::trace(format!("API: Request {}", &json));
         let msg = Message::from_str_typed::<Request>(&json)?;
-        server.send_message(msg)
+        let _ = server.send_message(msg)?;
+        Ok(Some(true))
     })
 }
 
@@ -363,7 +364,8 @@ fn notify(env: &Env, root_uri: String, file_type: String, json: String) -> Emacs
     with_server(&root_uri, &file_type, true, |server| {
         Logger::trace(format!("API: Notify {}", &json));
         let msg = Message::from_str_typed::<Notification>(&json)?;
-        server.send_message(msg)
+        let _ = server.send_message(msg)?;
+        Ok(Some(true))
     })
 }
 

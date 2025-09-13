@@ -458,7 +458,7 @@ impl LspServer {
         }
     }
 
-    pub fn send_message<M: Into<Message>>(&self, msg: M) -> EmacsResult<Option<bool>> {
+    pub fn send_message<M: Into<Message>>(&self, msg: M) -> EmacsResult<()> {
         let msg = msg.into();
         match &msg {
             Message::Request(req) if req.request_tick.is_some() => {
@@ -475,7 +475,7 @@ impl LspServer {
             _ => {} // do nothing for Message::Notification and Message::Response
         }
         self.send_message_raw(msg)?;
-        Ok(Some(true))
+        Ok(())
     }
 
     pub fn read_response(&self) -> Option<Response> {
