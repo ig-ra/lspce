@@ -1,4 +1,22 @@
-use std::process;
+use std::{
+    process::ExitStatus,
+    sync::{
+        atomic::{AtomicBool, Ordering},
+        Arc, Mutex,
+    },
+    time::Duration,
+};
+
+use crossbeam_channel::{Receiver, Sender};
+
+use crate::{
+    AtomicServerStatus, LspServer, LspServerData, LspServerInfo, Message, ResourceState, Resources, ServerStatus,
+    ThreadResult,
+};
+
+#[cfg(unix)]
+use std::os::unix::process::ExitStatusExt;
+
 pub const TENTH_OF_SEC: Duration = Duration::from_millis(100);
 pub const ONE_SEC: Duration = Duration::from_secs(1);
 pub const TWO_SECS: Duration = Duration::from_secs(2);
@@ -73,4 +91,27 @@ impl crate::env::UserMsgEnv for MockEnv {
     fn user_message(&self, text: &str) {
         self.messages.lock().unwrap().push(text.to_string());
     }
+}
+
+pub fn mock_server() -> (LspServer, Receiver<Message>, Sender<Message>) {
+    use ThreadResult::NotJoined;
+
+    let (s_lsp, r_emacs) = crossbeam_channel::unbounded::<Message>();
+    let (s_emacs, r_lsp) = crossbeam_channel::unbounded::<Message>();
+
+    let server = LspServer {
+        resources: Resources {
+            child: None,
+            transport: None,
+            dispatcher: None,
+            state: ResourceState { transport: [NotJoined, NotJoined, NotJoined], exit: None },
+        },
+        server_info: LspServerInfo::new(123),
+        status: AtomicServerStatus::new(ServerStatus::Running),
+        sender: Some(s_emacs),
+        server_data: Arc::new(Mutex::new(LspServerData::new())),
+        exit: Arc::new(AtomicBool::new(false)),
+        name_id: "mock_server".to_string(),
+    };
+    (server, r_lsp, s_lsp)
 }
