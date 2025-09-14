@@ -208,7 +208,7 @@ impl LspServer {
 
         let start_time = Instant::now();
         loop {
-            if let Some(response) = self.read_response_unticked(&req_id) {
+            if let Some(response) = self.find_response_unticked(&req_id) {
                 if let Some(error) = &response.error {
                     bail!("Failed to initialize - LSP server error {:?}", error);
                 }
@@ -327,7 +327,7 @@ impl LspServer {
 
         let start_time = Instant::now();
         while start_time.elapsed() <= timeout {
-            if self.read_response_unticked(&req_id).is_some() {
+            if self.find_response_unticked(&req_id).is_some() {
                 self.send_message(Notification::new("exit"))?;
                 self.set_status(ServerStatus::Exiting);
                 Logger::info(format!("Shutdown protocol finished for {}", self.name_id));
@@ -458,7 +458,7 @@ impl LspServer {
     pub fn send_message<M: Into<Message>>(&self, msg: M) -> EmacsResult<()> {
         let msg = msg.into();
         match &msg {
-            Message::Request(req) if req.request_tick.is_some() => {
+            Message::Request(req) => {
                 if req.method == "textDocument/didChange" || req.method == "textDocument/didClose" {
                     if let Some(uri) =
                         req.params.get("textDocument").and_then(|td| td.get("uri")).and_then(|uri| uri.as_str())
@@ -466,10 +466,13 @@ impl LspServer {
                         self.clear_diagnostics(uri); // clean diagnostics on change/close
                     }
                 }
-                // always update, even if send will fail. Server could answer faster than our handling of send/then update
-                self.update_request_info(req.id.clone(), req.request_tick.as_ref().unwrap().clone());
+
+                // always update, even if consequent send will fail. Prevent race condition if we send then update.
+                if let Some(tick) = &req.request_tick {
+                    self.update_request_info(req.id.clone(), tick.clone());
+                }
             }
-            _ => {} // do nothing for Message::Notification and Message::Response
+            _ => {} // do nothing for Notification, Response and Request w/o tick
         }
         self.send_message_raw(msg)?;
         Ok(())
@@ -481,7 +484,7 @@ impl LspServer {
     }
 
     // find matching response by id, discard/remove non-matching ones
-    pub fn read_response_unticked(&self, id: &RequestId) -> Option<Response> {
+    pub fn find_response_unticked(&self, id: &RequestId) -> Option<Response> {
         let mut server_data = self.server_data.lock().unwrap();
         while let Some(response) = server_data.responses_unticked.pop_front() {
             if &response.id == id {

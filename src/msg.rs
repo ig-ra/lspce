@@ -1,4 +1,4 @@
-use std::{    
+use std::{
     fmt,
     io::{self, BufRead, Read, Write},
 };
@@ -114,7 +114,11 @@ pub struct Request {
     pub params: serde_json::Value,
     #[serde(skip)]
     content: String,
-    #[serde(skip_serializing, default)] // always present from elisp side, not present in real-LSP orginating requests
+
+    // optional field to track requests generation sent from elisp. Not part of JSON-RPC spec
+    // always present in requests sent from elisp lspce side,
+    // not present in real-LSP orginating requests and in requests sent from lspce rust side
+    #[serde(skip_serializing, default)]
     pub request_tick: Option<String>,
 }
 

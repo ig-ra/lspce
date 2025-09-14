@@ -275,8 +275,8 @@ mod test_lspserver_teardown {
 
 #[cfg(test)]
 mod test_send_message {
-    use super::{mock_server, LspServer, Message, Notification, Request, Response};
-    use crate::test_utils::TENTH_OF_SEC;
+    use super::*;
+    use crate::{lsp_server::FileInfo, test_utils::TENTH_OF_SEC, tests::setup_test_logger};
 
     #[test]
     fn test_send_message_errors() {
@@ -286,38 +286,26 @@ mod test_send_message {
             let (mut server, r_lsp, s_lsp) = mock_server();
             match case {
                 "drop" => drop(r_lsp),
-                "take" => server.sender = None,
+                "take" => server.sender = None, // same as take for our case
                 _ => unreachable!(),
             }
-            let res = server.send_message(Request::new_shutdown());
-            assert!(res.is_err(), "send_message should fail");
-            let actual = res.unwrap_err().to_string();
-            assert!(actual.contains(expected), "unexpected error: {actual} != {expected}");
-
-            let server_data = server.server_data.lock().unwrap();
-            assert!(server_data.request_ticks.is_empty(), "No tick should be recorded");
+            let err = server.send_message(Request::new_shutdown()).expect_err("send_message should fail");
+            assert!(err.to_string().contains(expected), "unexpected error: {err} != {expected}");
         }
     }
 
     #[test]
     fn test_send_message_ok() {
-        fn test_send<M: Into<Message>>(msg: M) {
+        fn test_send<M: Into<Message> + Clone>(msg: M) {
             let (mut server, r_lsp, s_lsp) = mock_server();
-            let res = server.send_message(msg);
-            assert_eq!(res.unwrap(), Some(true), "send_message should succeed");
+            let sent_msg = msg.clone();
+            let res = server.send_message(msg).expect("send_message shuld succeed");
 
             let lsp_msg = r_lsp.recv_timeout(TENTH_OF_SEC).expect("Should receive message");
-            let server_data = server.server_data.lock().unwrap();
-            match lsp_msg {
-                Message::Request(req) => {
-                    // TODO: test clear diagnostic
-                    // TODO: test tick creation?
-                    assert!(server_data.request_ticks.contains_key(&req.id), "Expected to record request ID")
-                }
-                _ => assert!(server_data.request_ticks.is_empty(), "Expected to record request ID"),
-            }
+            assert_eq!(lsp_msg, sent_msg.into(), "Messages should match");
         }
 
+        // test sending of all message types and conversions via into()
         test_send(Request::new_shutdown());
         test_send(Message::Request(Request::new_shutdown()));
 
@@ -331,5 +319,108 @@ mod test_send_message {
     }
 
     #[test]
+    fn test_send_message_update_server_data() {
+        fn test_send<M: Into<Message>>(msg: M, drop_sender: bool, tick: &str) {
+            let (mut server, r_lsp, s_lsp) = mock_server();
+            {
+                // check initial state
+                let mut server_data = server.server_data.lock().unwrap();
+                assert_eq!(server_data.request_ticks.len(), 0, "Should be empty");
+                assert_eq!(server_data.request_ticks.len(), 0, "Should be empty");
+                assert_eq!(server_data.latest_request_tick, String::new(), "Latest request tick on init");
+            }
+
+            let msg = msg.into();
+            let msg_orig = msg.clone();
+            let msg: Message = if drop_sender {
+                drop(s_lsp); // simulate send error
+                let res = server.send_message(msg); //.expect_err("send_message should fail");
+                println!("{:?}", res);
+                msg_orig
+            } else {
+                server.send_message(msg).expect("send_message should succeed");
+                let msg = r_lsp.recv_timeout(TENTH_OF_SEC).expect("Should receive message");
+                assert_eq!(msg_orig, msg, "messages should match");
+                msg_orig
+            };
+
+            // assert server_data (updated only on Request with tick)
+            let server_data = server.server_data.lock().unwrap();
+            match &msg {
+                Message::Request(req) if req.request_tick.is_some() => {
+                    //println!("Yes tick: {:?}", req);
+                    if let Some(req_tick) = &req.request_tick {
+                        assert_eq!(req_tick, tick, "Ticks should be equal: {req_tick} vs {tick}");
+                        assert_eq!(server_data.latest_request_tick, *tick, "Latest request tick");
+                        assert_eq!(server_data.request_ticks.len(), 1, "One tick recorded");
+                        assert_eq!(server_data.request_ticks.get(&req.id).unwrap(), tick, "Request ticks map");
+                    }
+                }
+                other => {
+                    // println!("No tick: {:?}", other);
+                    // Response, Notification and Request without tick should not update server_data
+                    // Response with tick
+                    assert_eq!(server_data.request_ticks.len(), 0, "Should be no ticks recorded");
+                    assert_eq!(server_data.latest_request_tick, String::new(), "Latest tick should be unset");
+                }
+            }
+        }
+
+        // passthrough for Response, Notification, Request without tick
+        test_send(Request::new_shutdown(), false, "");
+        test_send(Notification::new("exit"), false, "");
+        test_send(Response::new_ok(3, "success").unwrap(), false, "");
+        test_send(Response::new_err("err", -1, "fail"), false, "");
+
+        // data update: Request with tick
+        let mut req = Request::new("id", "method", Some(serde_json::Value::Null)).unwrap();
+        let mut tick = "request_tick1";
+        req.request_tick = Some(tick.to_string());
+        test_send(req, false, tick);
+
+        // passthrough: Response with tick (should not happen in practice, since those responses are not sent to LSP and not passing via send_msg())
+        let mut resp = Response::new_err("id", -1, "fail");
+        tick = "response_tick";
+        resp.request_tick = tick.to_string();
+        test_send(resp, false, tick);
+
+        // data should be updated even if senfing Request with tick fails
+        let mut req = Request::new("id", "method", Some(serde_json::Value::Null)).unwrap();
+        tick = "request_tick2";
+        req.request_tick = Some(tick.to_string());
+        test_send(req, true, tick);
+    }
+
+    #[test]
+    fn test_send_message_clear_diagnostic() {
+        let (mut server, r_lsp, s_lsp) = mock_server();
+
+        {
+            // Manually add diagnostics for a URIs
+            let mut server_data = server.server_data.lock().unwrap();
+
+            for uri in ["a", "b"] {
+                let mut file_info = FileInfo::new(uri);
+                file_info.diagnostics.push(Diagnostic::default());
+                server_data.file_infos.insert(uri.to_string(), file_info);
+            }
+        }
+
+        // create and send a didChange request for one of the files
+        let req =
+            Request::new("id", "textDocument/didChange", serde_json::json!({"textDocument": {"uri": "a"}})).unwrap();
+
+        // Send the message
+        server.send_message(req).expect("send_message should succeed");
+
+        // verify diagnosticcs cleared for one file and kept for another
+        let server_data = server.server_data.lock().unwrap();
+        for (uri, cleared) in [("a", true), ("b", false)] {
+            assert_eq!(
+                server_data.file_infos.get(uri).unwrap().diagnostics.is_empty(),
+                cleared,
+                "Diagnostics for file {uri} should be cleared={cleared}"
+            );
+        }
     }
 }
