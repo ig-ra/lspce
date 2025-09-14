@@ -178,11 +178,14 @@ impl LspServer {
             server_info.info.name = name.to_string();
         }
 
+        let server_data = Arc::new(Mutex::new(LspServerData::new()));
+        let dispatcher = Self::start_dispatcher(receiver, &exit, &server_data);
+
         use ThreadResult::NotJoined;
         let mut resources = Resources {
             child: Some(child),
             transport: Some(transport),
-            dispatcher: None,
+            dispatcher: Some(dispatcher),
             state: ResourceState { transport: [NotJoined, NotJoined, NotJoined], exit: None },
         };
 
@@ -192,11 +195,9 @@ impl LspServer {
             server_info: server_info,
             status: AtomicServerStatus::new(ServerStatus::Starting),
             sender: Some(sender),
-            server_data: Arc::new(Mutex::new(LspServerData::new())),
+            server_data: server_data,
             exit: exit,
         };
-        server.resources.dispatcher =
-            Some(LspServer::start_dispatcher(receiver, Arc::clone(&server.exit), Arc::clone(&server.server_data)));
 
         Ok(server)
     }
@@ -341,92 +342,97 @@ impl LspServer {
         return Err(io::Error::new(io::ErrorKind::TimedOut, msg).into());
     }
 
-    fn start_dispatcher(
-        receiver: Receiver<Message>, exit: Arc<AtomicBool>, server_data: Arc<Mutex<LspServerData>>,
-    ) -> thread::JoinHandle<()> {
-        let handle = thread::spawn(move || {
-            logger::set_log_prefix("[DISP] - ");
-            for msg in receiver {
-                if exit.load(Ordering::Relaxed) {
-                    Logger::info(&format!("requested to exit"));
-                    break;
+    fn dispatcher_loop(receiver: Receiver<Message>, exit: Arc<AtomicBool>, server_data: Arc<Mutex<LspServerData>>) {
+        for msg in receiver {
+            if exit.load(Ordering::Relaxed) {
+                Logger::info(&format!("requested to exit"));
+                break;
+            }
+            match msg {
+                Message::Request(r) => {
+                    // REVIEW: unused? read_requests() is reading, but there is no API to call read_requests
+                    // How should we handle server initiated requests to lspce?
+
+                    // if r.method == "workspace/configuration" {
+                    //     let mut server_data = server_data.lock().unwrap();
+                    //     server_data.requests.push_back(r);
+                    // }
                 }
-                match msg {
-                    Message::Request(r) => {
-                        // REVIEW: unused? read_requests() is reading, but there is no API to call read_requests
-                        // How should we handle server initiated requests to lspce?
+                Message::Response(mut r) => {
+                    let id = r.id.clone();
 
-                        // if r.method == "workspace/configuration" {
-                        //     let mut server_data = server_data.lock().unwrap();
-                        //     server_data.requests.push_back(r);
-                        // }
-                    }
-                    Message::Response(mut r) => {
-                        let id = r.id.clone();
+                    let mut server_data = server_data.lock().unwrap();
 
-                        let mut server_data = server_data.lock().unwrap();
-
-                        if let Some(request_tick) = server_data.request_ticks.remove(&id) {
-                            Logger::debug(format!("Request tick for id {} is {}", id, request_tick));
-                            if request_tick == server_data.latest_request_tick {
-                                r.request_tick = request_tick.clone();
-                                server_data.responses.bounded_push_back(r);
-                            }
-                            // FIXME: what about String ids? how we define order?
-                            if server_data.latest_response_id < id {
-                                server_data.latest_response_id = id;
-                                server_data.latest_response_tick = request_tick;
-                                Logger::debug(format!(
-                                    "Set latest response tick for id {} to {}",
-                                    server_data.latest_response_id, &server_data.latest_response_tick
-                                ));
-                            }
-                        } else {
-                            // TODO: should we limit this only to `shutdown` and `initialize` responses?
-                            Logger::trace(format!("No request tick for id {}", id));
-                            server_data.responses_unticked.bounded_push_back(r);
+                    if let Some(request_tick) = server_data.request_ticks.remove(&id) {
+                        Logger::debug(format!("Request tick for id {} is {}", id, request_tick));
+                        if request_tick == server_data.latest_request_tick {
+                            r.request_tick = request_tick.clone();
+                            server_data.responses.bounded_push_back(r);
                         }
-                    }
-                    Message::Notification(r) => {
-                        if r.method == "exit" {
-                            // Self exit notification from IO writer.
-                            // Not really needed since we'll get an error once writer drop it's channel end
-                            Logger::info(format!("exit notification"));
-                            break;
-                        } else if r.method == "textDocument/publishDiagnostics" {
-                            // cache diagnostics so they won't pour into Emacs
-                            match serde_json::from_value::<PublishDiagnosticsParams>(r.params) {
-                                Ok(mut params) => {
-                                    let uri_string: String = params.uri.to_string();
-                                    let mut file_info = FileInfo::new(&uri_string);
-                                    // cache no more than MAX_DIAGNOSTICS_COUNT diagnostics
-                                    let max_diagnostic_count = MAX_DIAGNOSTICS_COUNT.load(Ordering::Relaxed);
-                                    if max_diagnostic_count >= 0
-                                        && params.diagnostics.len() > max_diagnostic_count as usize
-                                    {
-                                        params.diagnostics.truncate(max_diagnostic_count as usize);
-                                    }
-                                    file_info.diagnostics = params.diagnostics;
-                                    let mut server_data = server_data.lock().unwrap();
-                                    server_data.file_infos.insert(uri_string, file_info);
-                                }
-                                Err(e) => {
-                                    // parsing failed. Skip this notification
-                                    Logger::error(format!("Failed to parse PublishDiagnosticsParams: {}", e));
-                                }
-                            }
-                        } else {
-                            // other notifications
-                            let mut server_data = server_data.lock().unwrap();
-                            if server_data.notifications.len() > MAX_NOTIFICATIONS {
-                                server_data.notifications.pop_front();
-                            }
-                            server_data.notifications.push_back(r);
+                        // FIXME: what about String ids? how we define order?
+                        if server_data.latest_response_id < id {
+                            server_data.latest_response_id = id;
+                            server_data.latest_response_tick = request_tick;
+                            Logger::debug(format!(
+                                "Set latest response tick for id {} to {}",
+                                server_data.latest_response_id, &server_data.latest_response_tick
+                            ));
                         }
+                    } else {
+                        // Unticked responses (for requests sent internally by us, lspce-initiated)
+                        // TODO: should we limit this only to `shutdown` and `initialize`?
+                        Logger::trace(format!("No request tick for id {}", id));
+                        server_data.responses_unticked.bounded_push_back(r);
+                    }
+                }
+                Message::Notification(r) => {
+                    if r.method == "exit" {
+                        // Self-exit notification from IO writer to stop dispatcher loop and exit thread.
+                        // Not really needed since we'll get an error once writer drop it's channel end
+                        Logger::info(format!("exit notification"));
+                        break;
+                    } else if r.method == "textDocument/publishDiagnostics" {
+                        // cache diagnostics so they won't pour into Emacs
+                        match serde_json::from_value::<PublishDiagnosticsParams>(r.params) {
+                            Ok(mut params) => {
+                                let uri_string: String = params.uri.to_string();
+                                let mut file_info = FileInfo::new(&uri_string);
+                                // cache no more than MAX_DIAGNOSTICS_COUNT diagnostics
+                                let max_diagnostic_count = MAX_DIAGNOSTICS_COUNT.load(Ordering::Relaxed);
+                                if max_diagnostic_count >= 0 && params.diagnostics.len() > max_diagnostic_count as usize
+                                {
+                                    params.diagnostics.truncate(max_diagnostic_count as usize);
+                                }
+                                file_info.diagnostics = params.diagnostics;
+                                let mut sd = server_data.lock().unwrap();
+                                sd.file_infos.insert(uri_string, file_info);
+                            }
+                            Err(e) => {
+                                Logger::error(format!("Failed to parse PublishDiagnosticsParams: {}", e));
+                            }
+                        }
+                    } else {
+                        // other notifications
+                        let mut sd = server_data.lock().unwrap();
+                        if sd.notifications.len() > MAX_NOTIFICATIONS {
+                            sd.notifications.pop_front();
+                        }
+                        sd.notifications.push_back(r);
                     }
                 }
             }
-            Logger::info("finished");
+        }
+        Logger::info("finished");
+    }
+
+    pub(crate) fn start_dispatcher(
+        receiver: Receiver<Message>, exit: &Arc<AtomicBool>, server_data: &Arc<Mutex<LspServerData>>,
+    ) -> thread::JoinHandle<()> {
+        let exit_clone = Arc::clone(exit);
+        let server_data_clone = Arc::clone(server_data);
+        let handle = thread::spawn(move || {
+            logger::set_log_prefix("[DISP] - ");
+            Self::dispatcher_loop(receiver, exit_clone, server_data_clone);
         });
         handle
     }
@@ -435,16 +441,6 @@ impl LspServer {
         let mut server_data = self.server_data.lock().unwrap();
         server_data.latest_request_tick = tick.clone();
         server_data.request_ticks.insert(id, tick);
-    }
-
-    pub fn get_latest_response_id(&self) -> RequestId {
-        let server_data = self.server_data.lock().unwrap();
-        server_data.latest_response_id.clone()
-    }
-
-    pub fn get_latest_response_tick(&self) -> String {
-        let server_data = self.server_data.lock().unwrap();
-        server_data.latest_response_tick.clone()
     }
 
     fn send_message_raw(&self, msg: Message) -> EmacsResult<()> {
@@ -536,6 +532,16 @@ impl LspServer {
         if let Some(mut file_info) = server_data.file_infos.get_mut(uri.as_ref()) {
             file_info.diagnostics.clear();
         }
+    }
+
+    pub fn get_latest_response_id(&self) -> RequestId {
+        let server_data = self.server_data.lock().unwrap();
+        server_data.latest_response_id.clone()
+    }
+
+    pub fn get_latest_response_tick(&self) -> String {
+        let server_data = self.server_data.lock().unwrap();
+        server_data.latest_response_tick.clone()
     }
 }
 
