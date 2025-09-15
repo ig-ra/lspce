@@ -804,7 +804,7 @@ mod test_lspserver_teardown {
 #[cfg(test)]
 mod test_send_message {
     use super::*;
-    use crate::{lsp_server::FileInfo, test_utils::mock_server, test_utils::TENTH_OF_SEC, tests::setup_test_logger};
+    use crate::{lsp_server::FileInfo, test_utils::mock_server, test_utils::TENTH_OF_SEC};
 
     #[test]
     fn test_send_message_errors() {
@@ -952,3 +952,64 @@ mod test_send_message {
         }
     }
 }
+
+#[cfg(test)]
+mod test_dispatcher_exit {
+    use super::*;
+    use crate::test_utils::{mock_server, setup_test_logger, ONE_SEC};
+    use crossbeam_channel::{bounded, unbounded};
+
+    fn start_dispatcher_thread(server: &LspServer) -> (thread::JoinHandle<()>, Sender<Message>, Receiver<()>) {
+        let (dispatcher_tx, dispatcher_rx) = unbounded();
+        let (done_tx, done_rx) = bounded::<()>(0);
+
+        let exit = Arc::clone(&server.exit);
+        let server_data = Arc::clone(&server.server_data);
+        let dispatcher = std::thread::spawn(move || {
+            LspServer::dispatcher_loop(dispatcher_rx, exit, server_data);
+            done_tx.send(()).ok();
+        });
+        return (dispatcher, dispatcher_tx, done_rx);
+    }
+
+    #[test]
+    fn dispatcher_exits_on_notification() {
+        setup_test_logger();
+        let (server, r_lsp, s_lsp) = mock_server();
+        let (dispatcher, dispatcher_tx, done_rx) = start_dispatcher_thread(&server);
+
+        // send exit notification and wait for completion
+        let notif = Notification::new("exit");
+        dispatcher_tx.send(Message::Notification(notif)).unwrap();
+        assert!(done_rx.recv_timeout(ONE_SEC).is_ok(), "dispatcher should exit");
+        dispatcher.join().ok();
+    }
+
+    #[test]
+    fn dispatcher_exits_on_exit_flag() {
+        setup_test_logger();
+        let (server, r_lsp, s_lsp) = mock_server();
+        let (dispatcher, dispatcher_tx, done_rx) = start_dispatcher_thread(&server);
+
+        // set exit flag, unblock dispatcher and wait for completion
+        server.exit.store(true, Ordering::Relaxed);
+        dispatcher_tx.send(Notification::new("dummy").into()).unwrap();
+        assert!(done_rx.recv_timeout(ONE_SEC).is_ok(), "dispatcher should exit");
+        dispatcher.join().ok();
+    }
+
+    #[test]
+    fn dispatcher_exits_on_close_channel() {
+        setup_test_logger();
+        let (server, r_lsp, s_lsp) = mock_server();
+        let (dispatcher, dispatcher_tx, done_rx) = start_dispatcher_thread(&server);
+
+        // drop dispatcher tx end, causing dispatcher to exit
+        drop(dispatcher_tx); // close channel
+        assert!(done_rx.recv_timeout(ONE_SEC).is_ok(), "dispatcher should exit");
+        dispatcher.join().ok();
+    }
+}
+
+#[cfg(test)]
+mod test_dispatcher_work {}
