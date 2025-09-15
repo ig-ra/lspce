@@ -34,3 +34,14 @@ pub fn kill_child_and_wait_with_timeout(
     }
     wait_child_with_timeout(child, timeout, id)
 }
+
+// break the loop if exit flag is set
+#[macro_export]
+macro_rules! break_if_should_exit {
+    ($exit_flag:expr) => {{
+        if $exit_flag.load(Ordering::Relaxed) {
+            Logger::info(&format!("requested to exit"));
+            break;
+        }
+    }};
+}

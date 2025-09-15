@@ -1,5 +1,6 @@
 use crate::{
     bounded_queue::VecDequeExt,
+    break_if_should_exit,
     logger::{self, Logger},
     msg::{Message, Notification, Request, RequestId, Response},
     stdio::{IoThreads, ThreadResult},
@@ -344,10 +345,8 @@ impl LspServer {
 
     fn dispatcher_loop(receiver: Receiver<Message>, exit: Arc<AtomicBool>, server_data: Arc<Mutex<LspServerData>>) {
         for msg in receiver {
-            if exit.load(Ordering::Relaxed) {
-                Logger::info(&format!("requested to exit"));
-                break;
-            }
+            break_if_should_exit!(&exit);
+
             match msg {
                 Message::Request(r) => {
                     // REVIEW: unused? read_requests() is reading, but there is no API to call read_requests

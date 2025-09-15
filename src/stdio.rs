@@ -15,6 +15,7 @@ use std::{
 
 use crossbeam_channel::{bounded, Receiver, Sender};
 
+use crate::break_if_should_exit;
 use crate::bufext::BufReadEofExt;
 use crate::logger;
 use crate::msg::{Message, Notification, Response};
@@ -22,15 +23,6 @@ use crate::{
     connection::{NOTIFICATION_MAX, REQUEST_MAX},
     logger::Logger,
 };
-
-macro_rules! break_if_should_exit {
-    ($exit_flag:expr) => {{
-        if $exit_flag.load(Ordering::Relaxed) {
-            Logger::info(&format!("requested to exit"));
-            break;
-        }
-    }};
-}
 
 /// Creates an LSP connection via stdio.
 pub(crate) fn stdio_transport(
