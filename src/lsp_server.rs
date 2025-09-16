@@ -80,8 +80,8 @@ pub(crate) struct LspServerData {
     pub(crate) file_infos: HashMap<String, FileInfo>,
 
     // requests: VecDeque<Request>, // REVIEW: unused?
-    pub(crate) responses: VecDeque<Response>,          // ticked
-    pub(crate) responses_unticked: VecDeque<Response>, // non-ticked
+    responses: VecDeque<Response>,          // ticked
+    responses_unticked: VecDeque<Response>, // non-ticked
     notifications: VecDeque<Notification>,
 }
 
@@ -97,8 +97,7 @@ impl LspServerData {
             // requests: VecDeque::new(), // REVIEW: unused?
             responses: VecDeque::with_capacity(MAX_TICKED_RESPONSES),
             responses_unticked: VecDeque::with_capacity(MAX_NONTICKED_RESPONSES),
-
-            notifications: VecDeque::new(),
+            notifications: VecDeque::with_capacity(MAX_NOTIFICATIONS),
         }
     }
 }
@@ -417,11 +416,8 @@ impl LspServer {
                         }
                     } else {
                         // other notifications
-                        let mut sd = server_data.lock().unwrap();
-                        if sd.notifications.len() > MAX_NOTIFICATIONS {
-                            sd.notifications.pop_front();
-                        }
-                        sd.notifications.push_back(notif);
+                        let mut server_data = server_data.lock().unwrap();
+                        server_data.notifications.bounded_push_back(notif);
                     }
                 }
             }
@@ -1089,7 +1085,6 @@ mod test_dispatcher {
 
         #[test]
         fn test_dispatcher_notification_diag_update() {
-            setup_test_logger();
             let uri = "file://b";
 
             let infos = run_dispatcher_test(|server, dispatcher_tx| {
@@ -1108,7 +1103,6 @@ mod test_dispatcher {
 
         #[test]
         fn test_dispatcher_notification_diag_clean() {
-            setup_test_logger();
             let uri = "file://c";
 
             let infos = run_dispatcher_test(|server, dispatcher_tx| {
@@ -1119,6 +1113,26 @@ mod test_dispatcher {
                 dispatcher_tx.send(Notification::new("exit").into()).unwrap();
             });
             assert_eq!(infos.len(), 0, "Should be empty");
+        }
+
+        #[test]
+        fn test_dispatcher_notification_limit() {
+            let (server, r_lsp, s_lsp) = mock_server();
+            let (dispatcher, dispatcher_tx, done_rx) = start_dispatcher_thread(&server);
+
+            for i in 0..(MAX_NOTIFICATIONS * 2) {
+                let notif = Notification::new(format!("{i}")); // dummy notification with num
+                dispatcher_tx.send(notif.into()).unwrap(); // should use bounded_push_back
+            }
+            drop(dispatcher_tx); // close channel to exit dispatcher
+            assert!(done_rx.recv_timeout(ONE_SEC).is_ok(), "dispatcher should exit");
+            dispatcher.join().ok();
+
+            let max = MAX_NOTIFICATIONS;
+            let server_data = server.server_data.lock().unwrap();
+            assert_eq!(server_data.notifications.len(), max, "Should store max notifications");
+            assert_eq!(server_data.notifications[0].method, format!("{max}"), "Oldest notification");
+            assert_eq!(server_data.notifications[max - 1].method, format!("{}", max * 2 - 1), "Newest notification");
         }
     }
 }
