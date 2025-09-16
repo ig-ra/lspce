@@ -63,7 +63,7 @@ const KILL_WAIT_TIMEOUT: Duration = Duration::from_secs(2);
 const GRACEFUL_SHUTDOWN_TIMEOUT: Duration = Duration::from_secs(3);
 const POLL_INTERVAL: Duration = Duration::from_millis(10);
 
-static MAX_DIAGNOSTICS_COUNT: AtomicI32 = AtomicI32::new(30);
+static MAX_DIAGNOSTICS: AtomicI32 = AtomicI32::new(30);
 
 const REAPER_INTERVAL: Duration = Duration::from_secs(5);
 
@@ -185,13 +185,13 @@ fn init(env: &Env) -> EmacsResult<Value<'_>> {
 
 #[defun]
 fn change_max_diagnostics_count(env: &Env, count: i32) -> EmacsResult<Value<'_>> {
-    MAX_DIAGNOSTICS_COUNT.store(count, Ordering::Relaxed);
+    MAX_DIAGNOSTICS.store(count, Ordering::Relaxed);
     env.lspce_message(format!("Set max diagnostics count to {}", count))
 }
 
 #[defun]
 fn read_max_diagnostics_count(env: &Env) -> EmacsResult<i32> {
-    let count = MAX_DIAGNOSTICS_COUNT.load(Ordering::Relaxed);
+    let count = MAX_DIAGNOSTICS.load(Ordering::Relaxed);
     Ok(count)
 }
 

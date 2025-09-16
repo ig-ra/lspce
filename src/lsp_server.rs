@@ -5,7 +5,7 @@ use crate::{
     msg::{Message, Notification, Request, RequestId, Response},
     stdio::{IoThreads, ThreadResult},
     utils::{kill_child_and_wait_with_timeout, wait_child_with_timeout},
-    GRACEFUL_SHUTDOWN_TIMEOUT, KILL_WAIT_TIMEOUT, MAX_DIAGNOSTICS_COUNT, MAX_NONTICKED_RESPONSES, MAX_NOTIFICATIONS,
+    GRACEFUL_SHUTDOWN_TIMEOUT, KILL_WAIT_TIMEOUT, MAX_DIAGNOSTICS, MAX_NONTICKED_RESPONSES, MAX_NOTIFICATIONS,
     MAX_TICKED_RESPONSES, POLL_INTERVAL,
 };
 
@@ -31,7 +31,7 @@ use std::{
     time::{Duration, Instant},
 };
 
-#[derive(Debug)]
+#[derive(Debug, Clone)]
 pub(crate) struct FileInfo {
     pub uri: String, // file name
     pub diagnostics: Vec<Diagnostic>,
@@ -384,27 +384,32 @@ impl LspServer {
                         server_data.responses_unticked.bounded_push_back(r);
                     }
                 }
-                Message::Notification(r) => {
-                    if r.method == "exit" {
+                Message::Notification(notif) => {
+                    if notif.method == "exit" {
                         // Self-exit notification from IO writer to stop dispatcher loop and exit thread.
                         // Not really needed since we'll get an error once writer drop it's channel end
                         Logger::info(format!("exit notification"));
                         break;
-                    } else if r.method == "textDocument/publishDiagnostics" {
+                    } else if notif.method == "textDocument/publishDiagnostics" {
                         // cache diagnostics so they won't pour into Emacs
-                        match serde_json::from_value::<PublishDiagnosticsParams>(r.params) {
+                        match serde_json::from_value::<PublishDiagnosticsParams>(notif.params) {
                             Ok(mut params) => {
-                                let uri_string: String = params.uri.to_string();
-                                let mut file_info = FileInfo::new(&uri_string);
-                                // cache no more than MAX_DIAGNOSTICS_COUNT diagnostics
-                                let max_diagnostic_count = MAX_DIAGNOSTICS_COUNT.load(Ordering::Relaxed);
+                                // cache no more than MAX_DIAGNOSTICS_COUNT diagnostics per file
+                                let max_diagnostic_count = MAX_DIAGNOSTICS.load(Ordering::Relaxed);
                                 if max_diagnostic_count >= 0 && params.diagnostics.len() > max_diagnostic_count as usize
                                 {
                                     params.diagnostics.truncate(max_diagnostic_count as usize);
                                 }
+                                let uri_str: String = params.uri.to_string();
+                                let mut file_info = FileInfo::new(&uri_str);
                                 file_info.diagnostics = params.diagnostics;
-                                let mut sd = server_data.lock().unwrap();
-                                sd.file_infos.insert(uri_string, file_info);
+
+                                let mut server_data = server_data.lock().unwrap();
+                                if file_info.diagnostics.is_empty() {
+                                    server_data.file_infos.remove(&uri_str); // clear
+                                } else {
+                                    server_data.file_infos.insert(uri_str, file_info);
+                                }
                             }
                             Err(e) => {
                                 Logger::error(format!("Failed to parse PublishDiagnosticsParams: {}", e));
@@ -416,7 +421,7 @@ impl LspServer {
                         if sd.notifications.len() > MAX_NOTIFICATIONS {
                             sd.notifications.pop_front();
                         }
-                        sd.notifications.push_back(r);
+                        sd.notifications.push_back(notif);
                     }
                 }
             }
@@ -953,10 +958,11 @@ mod test_send_message {
 }
 
 #[cfg(test)]
-mod test_dispatcher_exit {
+mod test_dispatcher {
     use super::*;
     use crate::test_utils::{mock_server, setup_test_logger, ONE_SEC};
     use crossbeam_channel::{bounded, unbounded};
+    use lsp_types::{Diagnostic, Position, PublishDiagnosticsParams, Range};
 
     fn start_dispatcher_thread(server: &LspServer) -> (thread::JoinHandle<()>, Sender<Message>, Receiver<()>) {
         let (dispatcher_tx, dispatcher_rx) = unbounded();
@@ -971,44 +977,148 @@ mod test_dispatcher_exit {
         return (dispatcher, dispatcher_tx, done_rx);
     }
 
-    #[test]
-    fn dispatcher_exits_on_notification() {
-        setup_test_logger();
+    fn run_dispatcher_test<F>(test_fn: F) -> HashMap<String, FileInfo>
+    where
+        F: FnOnce(&LspServer, &Sender<Message>),
+    {
         let (server, r_lsp, s_lsp) = mock_server();
         let (dispatcher, dispatcher_tx, done_rx) = start_dispatcher_thread(&server);
+        {
+            let server_data = server.server_data.lock().unwrap();
+            assert!(server_data.file_infos.is_empty(), "Should store no diagnostics");
+        }
 
-        // send exit notification and wait for completion
-        let notif = Notification::new("exit");
-        dispatcher_tx.send(Message::Notification(notif)).unwrap();
+        test_fn(&server, &dispatcher_tx);
+
         assert!(done_rx.recv_timeout(ONE_SEC).is_ok(), "dispatcher should exit");
         dispatcher.join().ok();
+
+        let server_data = server.server_data.lock().unwrap();
+        return server_data.file_infos.clone();
     }
 
-    #[test]
-    fn dispatcher_exits_on_exit_flag() {
-        setup_test_logger();
-        let (server, r_lsp, s_lsp) = mock_server();
-        let (dispatcher, dispatcher_tx, done_rx) = start_dispatcher_thread(&server);
+    fn create_publish_diagnostics_notification(uri: &str, range: std::ops::Range<u32>) -> Notification {
+        let diagnostics = range
+            .map(|i| {
+                Diagnostic::new(
+                    Range::new(Position::new(i, 0), Position::new(i, 1)),
+                    None,
+                    None,
+                    None,
+                    format!("diagnostic {}", i),
+                    None,
+                    None,
+                )
+            })
+            .collect();
 
-        // set exit flag, unblock dispatcher and wait for completion
-        server.exit.store(true, Ordering::Relaxed);
-        dispatcher_tx.send(Notification::new("dummy").into()).unwrap();
-        assert!(done_rx.recv_timeout(ONE_SEC).is_ok(), "dispatcher should exit");
-        dispatcher.join().ok();
+        let params = PublishDiagnosticsParams::new(uri.parse().unwrap(), diagnostics, None);
+        Notification::new_params("textDocument/publishDiagnostics", serde_json::to_value(params).unwrap()).unwrap()
     }
 
-    #[test]
-    fn dispatcher_exits_on_close_channel() {
-        setup_test_logger();
-        let (server, r_lsp, s_lsp) = mock_server();
-        let (dispatcher, dispatcher_tx, done_rx) = start_dispatcher_thread(&server);
+    mod exit {
+        use super::*;
 
-        // drop dispatcher tx end, causing dispatcher to exit
-        drop(dispatcher_tx); // close channel
-        assert!(done_rx.recv_timeout(ONE_SEC).is_ok(), "dispatcher should exit");
-        dispatcher.join().ok();
+        #[test]
+        fn test_dispatcher_exit_on_notification() {
+            run_dispatcher_test(|_server, dispatcher_tx| {
+                let notif = Notification::new("exit"); // self-exit notification
+                dispatcher_tx.send(Message::Notification(notif)).unwrap();
+            });
+        }
+
+        #[test]
+        fn test_dispatcher_exit_on_exit_flag() {
+            run_dispatcher_test(|server, dispatcher_tx| {
+                server.exit.store(true, Ordering::Relaxed); // set exit flag
+                dispatcher_tx.send(Notification::new("dummy").into()).unwrap();
+            });
+        }
+
+        #[test]
+        fn test_dispatcher_exit_on_close_channel() {
+            let (server, r_lsp, s_lsp) = mock_server();
+            let (dispatcher, dispatcher_tx, done_rx) = start_dispatcher_thread(&server);
+            drop(dispatcher_tx); // drop/close channel
+            assert!(done_rx.recv_timeout(ONE_SEC).is_ok(), "dispatcher should exit");
+            dispatcher.join().ok();
+        }
+    }
+
+    mod notification {
+        use std::i16::MAX;
+
+        use super::*;
+        use serde_json::json;
+
+        #[test]
+        fn test_dispatcher_notification_skip() {
+            setup_test_logger();
+
+            let test_cases = vec![
+                Notification::new("testDcocument/didOpen"), // not a publishDiagnostics notification
+                Notification::new_params("textDocument/publishDiagnostics", json!({"uri":"dummy", "diagnostics":[]}))
+                    .expect("Notification with empty diagnostics"), // empty diagnostic vector
+                Notification::new("textDocument/publishDiagnostics"), // no PublishDiagnosticsParams, will fail to parse
+                Notification::new_params("textDocument/publishDiagnostics", r#"{"file":"dummy"}"#)
+                    .expect("Notification with valid JSON but bad DiagnosticParam"), //bad param json, will fail to parse
+            ];
+
+            for notif in test_cases {
+                let infos = run_dispatcher_test(|server, dispatcher_tx| {
+                    dispatcher_tx.send(notif.into()).unwrap();
+                    dispatcher_tx.send(Notification::new("exit").into()).unwrap();
+                });
+                assert!(infos.is_empty(), "Should store no diagnostics");
+            }
+        }
+
+        #[test]
+        fn test_dispatcher_notification_diag_truncate_max() {
+            let uri = "file://a";
+
+            let max = MAX_DIAGNOSTICS.load(Ordering::Relaxed) as u32;
+            let infos = run_dispatcher_test(|server, dispatcher_tx| {
+                let many_diag = create_publish_diagnostics_notification(uri, 0..(max + 10));
+                dispatcher_tx.send(many_diag.into()).unwrap();
+                dispatcher_tx.send(Notification::new("exit").into()).unwrap();
+            });
+            assert_eq!(infos.len(), 1, "Should be single entry");
+            assert_eq!(infos.get(uri).unwrap().diagnostics.len(), max as usize, "Should have {max} diagnostics");
+        }
+
+        #[test]
+        fn test_dispatcher_notification_diag_update() {
+            setup_test_logger();
+            let uri = "file://b";
+
+            let infos = run_dispatcher_test(|server, dispatcher_tx| {
+                let diag_1_2 = create_publish_diagnostics_notification(uri, 1..2);
+                dispatcher_tx.send(diag_1_2.into()).unwrap();
+                let diag_5_9 = create_publish_diagnostics_notification(uri, 5..9);
+                dispatcher_tx.send(diag_5_9.into()).unwrap();
+                dispatcher_tx.send(Notification::new("exit").into()).unwrap();
+            });
+            assert_eq!(infos.len(), 1, "Should be single entry");
+            let diags = &infos.get(uri).unwrap().diagnostics;
+            assert_eq!(diags.len(), 4, "Should have 4 diagnostics");
+            assert_eq!(diags[0].message, "diagnostic 5", "First diag should be 5");
+            assert_eq!(diags[3].message, "diagnostic 8", "Last diag should be 8");
+        }
+
+        #[test]
+        fn test_dispatcher_notification_diag_clean() {
+            setup_test_logger();
+            let uri = "file://c";
+
+            let infos = run_dispatcher_test(|server, dispatcher_tx| {
+                let diag_1_2 = create_publish_diagnostics_notification(uri, 1..2);
+                dispatcher_tx.send(diag_1_2.into()).unwrap();
+                let diag_5_9 = create_publish_diagnostics_notification(uri, 0..0);
+                dispatcher_tx.send(diag_5_9.into()).unwrap();
+                dispatcher_tx.send(Notification::new("exit").into()).unwrap();
+            });
+            assert_eq!(infos.len(), 0, "Should be empty");
+        }
     }
 }
-
-#[cfg(test)]
-mod test_dispatcher_work {}
