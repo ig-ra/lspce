@@ -56,8 +56,8 @@ use stdio::IoThreads;
 pub use stdio::ThreadResult;
 use utils::*;
 
-const MAX_NOTIFICATIONS: usize = 10;
-const MAX_NONTICKED_RESPONSES: usize = 10; // responses for which ticks are not expected, e.g. not via lspce API
+const MAX_NOTIFICATIONS: usize = 5;
+const MAX_NONTICKED_RESPONSES: usize = 5; // responses for which ticks are not expected, e.g. not via lspce API
 const MAX_TICKED_RESPONSES: usize = 50; // responses for requests sent via lspce API
 const KILL_WAIT_TIMEOUT: Duration = Duration::from_secs(2);
 const GRACEFUL_SHUTDOWN_TIMEOUT: Duration = Duration::from_secs(3);
@@ -387,12 +387,10 @@ fn read_notification(env: &Env, root_uri: String, file_type: String) -> EmacsRes
 #[defun]
 fn read_file_diagnostics(env: &Env, root_uri: String, file_type: String, uri: String) -> EmacsResult<Option<String>> {
     with_server(&root_uri, &file_type, true, |server| {
-        let mut server_data = server.server_data.lock().unwrap();
-        Ok(server_data
-            .file_infos
-            .get(&uri)
-            .map(|file_info| serde_json::to_string(&file_info.diagnostics).context("Failed to serialize diagnostics"))
-            .transpose()?)
+        return Ok(match server.server_data.lock().unwrap().file_infos.get(&uri) {
+            Some(file_info) => Some(serde_json::to_string(&file_info.diagnostics).context("Serialize diagnostics")?),
+            None => None,
+        });
     })
 }
 
