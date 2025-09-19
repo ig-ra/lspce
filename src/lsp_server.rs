@@ -349,7 +349,6 @@ impl LspServer {
             match msg {
                 Message::Request(r) => {
                     // REVIEW: unused? read_requests() is reading, but there is no API to call read_requests
-                    // How should we handle server initiated requests to lspce?
 
                     // if r.method == "workspace/configuration" {
                     //     let mut server_data = server_data.lock().unwrap();
@@ -445,6 +444,7 @@ impl LspServer {
 
     fn send_message_raw(&self, msg: Message) -> EmacsResult<()> {
         if let Some(sender) = &self.sender {
+            Logger::trace(format!("[-->] {}", msg));
             sender.send(msg).context("Failed to send to LSP")
         } else {
             Err(anyhow!("No LSP sender channel"))
