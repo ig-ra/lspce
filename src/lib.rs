@@ -285,9 +285,7 @@ fn connect(
 
     let server_info = server.server_info.clone();
 
-    with_projects_mut(|projects| {
-        projects.add_server(root_uri, lsp_type, server);
-    });
+    with_projects_mut(|projects| projects.add_server(root_uri, lsp_type, server));
 
     Logger::info(format!("Connected to server successfully. server capabilities {}", &server_info.to_json_string()?));
     Ok(Some(server_info.to_json_string()?))
@@ -344,24 +342,31 @@ fn server(env: &Env, root_uri: String, file_type: String) -> EmacsResult<Option<
     with_server(&root_uri, &file_type, false, |server| Ok(Some(server.server_info.to_json_string()?)))
 }
 
+fn _request_async(json_str: String, server: &mut LspServer) -> EmacsResult<Option<bool>> {
+    let req = Message::from_str_typed::<Request>(json_str)?; // ensure type
+    if req.request_tick.is_none() {
+        bail!("Request must have a tick");
+    }
+    let _ = server.send_message(req)?;
+    Ok(Some(true))
+}
+
 #[defun_safe]
 #[defun]
-fn request_async(env: &Env, root_uri: String, file_type: String, json: String) -> EmacsResult<Option<bool>> {
-    with_server(&root_uri, &file_type, true, |server| {
-        let msg = Message::from_str_typed::<Request>(&json)?; // ensure type
-        let _ = server.send_message(msg)?;
-        Ok(Some(true))
-    })
+pub fn request_async(env: &Env, root_uri: String, file_type: String, json_str: String) -> EmacsResult<Option<bool>> {
+    with_server(&root_uri, &file_type, true, |server| _request_async(json_str, server))
+}
+
+fn _notify(json: String, server: &mut LspServer) -> EmacsResult<Option<bool>> {
+    let msg = Message::from_str_typed::<Notification>(&json)?; // ensure type
+    let _ = server.send_message(msg)?;
+    Ok(Some(true))
 }
 
 #[defun_safe]
 #[defun]
 fn notify(env: &Env, root_uri: String, file_type: String, json: String) -> EmacsResult<Option<bool>> {
-    with_server(&root_uri, &file_type, true, |server| {
-        let msg = Message::from_str_typed::<Notification>(&json)?; // ensure type
-        let _ = server.send_message(msg)?;
-        Ok(Some(true))
-    })
+    with_server(&root_uri, &file_type, true, |server| _notify(json, server))
 }
 
 /// precondition: have called read_latest_response_id and gotten the id.
@@ -402,4 +407,50 @@ fn read_latest_response_id(env: &Env, root_uri: String, file_type: String) -> Em
 #[defun]
 fn read_latest_response_tick(env: &Env, root_uri: String, file_type: String) -> EmacsResult<Option<String>> {
     with_server(&root_uri, &file_type, true, |server| Ok(Some(server.get_latest_response_tick())))
+}
+
+#[cfg(test)]
+mod api {
+    use super::*;
+    use crate::test_utils::mock_server;
+
+    fn test_common_failures<F>(
+        test_cases: Vec<(&str, Box<dyn Fn(&anyhow::Error) -> bool>)>, server: &mut LspServer, func: F,
+    ) where
+        F: Fn(String, &mut LspServer) -> EmacsResult<Option<bool>>,
+    {
+        for (json_str, err_check) in test_cases {
+            let res = func(json_str.to_string(), server);
+            assert!(res.is_err(), "expected error for case: {json_str}");
+            let err = res.unwrap_err();
+            assert!(err_check(&err), "unexpected error for {json_str}: {err}");
+        }
+    }
+    // just some sanity tests, since message type parsing and send_message already tested
+    #[test]
+    fn test_request_async_failures() {
+        let test_cases: Vec<(&str, Box<dyn Fn(&anyhow::Error) -> bool>)> = vec![
+            ("not a json", Box::new(|e| e.downcast_ref::<serde_json::Error>().is_some())), // not a json
+            (r#"{"id": 3, "result": "success"}"#, Box::new(|e| e.to_string().contains("Expected Request"))), // response
+            (r#"{"method": "exit"}"#, Box::new(|e| e.to_string().contains("Expected Request"))), // notification
+            (
+                r#"{"id":"no_request_tick", "method":"m"}"#,
+                Box::new(|e| e.to_string().contains("Request must have a tick")),
+            ),
+        ];
+
+        let (mut server, _, _) = mock_server();
+        test_common_failures(test_cases, &mut server, _request_async);
+    }
+
+    #[test]
+    fn test_notify_failures() {
+        let test_cases: Vec<(&str, Box<dyn Fn(&anyhow::Error) -> bool>)> = vec![
+            ("not a json", Box::new(|e| e.downcast_ref::<serde_json::Error>().is_some())), // not a json
+            (r#"{"id": 3, "result": "success"}"#, Box::new(|e| e.to_string().contains("Expected Notification"))), // response
+            (r#"{"id": 1, "method": "shutdown"}"#, Box::new(|e| e.to_string().contains("Expected Notification"))), // request
+        ];
+        let (mut server, _, _) = mock_server();
+        test_common_failures(test_cases, &mut server, _notify);
+    }
 }
