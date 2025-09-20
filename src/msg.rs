@@ -237,11 +237,11 @@ impl Message {
     }
 
     /// Deserialize specific message type from a JSON string.
-    pub fn from_str_typed<T>(json: &str) -> anyhow::Result<T>
+    pub fn from_str_typed<T>(json: impl AsRef<str>) -> anyhow::Result<T>
     where
         T: TryFrom<Message, Error = anyhow::Error>,
     {
-        Self::from_str(json)?.try_into()
+        Self::from_str(json.as_ref())?.try_into()
     }
 
     fn content(&self) -> &str {
