@@ -376,7 +376,12 @@ fn read_response_exact(
     env: &Env, root_uri: String, file_type: String, id: String, method: String,
 ) -> EmacsResult<Option<String>> {
     with_server(&root_uri, &file_type, true, |server| {
-        Ok(server.read_response_exact(RequestId::from(id), method).map(|r| r.into_string()))
+        // TODO: why we are passing `method' from elisp? we cannot compare by method anyway
+        let result = server.find_response_and_drain(&id);
+        if result.is_none() {
+            Logger::error(format!("failed to find response for {} id:{}", method, id));
+        }
+        Ok(result.map(|resp| resp.into_string()))
     })
 }
 

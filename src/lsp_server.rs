@@ -209,7 +209,7 @@ impl LspServer {
 
         let start_time = Instant::now();
         loop {
-            if let Some(response) = self.find_response_unticked(&req_id) {
+            if let Some(response) = self.find_response_unticked_and_drain(&req_id) {
                 if let Some(error) = &response.error {
                     bail!("Failed to initialize - LSP server error {:?}", error);
                 }
@@ -328,7 +328,7 @@ impl LspServer {
 
         let start_time = Instant::now();
         while start_time.elapsed() <= timeout {
-            if self.find_response_unticked(&req_id).is_some() {
+            if self.find_response_unticked_and_drain(&req_id).is_some() {
                 self.send_message(Notification::new("exit"))?;
                 self.set_status(ServerStatus::Exiting);
                 Logger::info(format!("Shutdown protocol finished for {}", self.name_id));
@@ -378,7 +378,7 @@ impl LspServer {
                     } else {
                         // Unticked responses (for requests sent internally by us, lspce-initiated)
                         // TODO: should we limit this only to `shutdown` and `initialize`?
-                        Logger::trace(format!("No request tick for id {}", id));
+                        Logger::debug(format!("No request tick for id {}", id));
                         server_data.responses_unticked.bounded_push_back(r);
                     }
                 }
@@ -408,6 +408,7 @@ impl LspServer {
                                 } else {
                                     server_data.file_infos.insert(uri_str, file_info);
                                 }
+                                // TODO: consider limiting number of files in file_infos map. lru_cache?
                             }
                             Err(e) => {
                                 Logger::error(format!("Failed to parse PublishDiagnosticsParams: {}", e));
@@ -480,7 +481,7 @@ impl LspServer {
     }
 
     // find matching response by id, discard/remove non-matching ones
-    pub fn find_response_unticked(&self, id: &RequestId) -> Option<Response> {
+    pub fn find_response_unticked_and_drain(&self, id: &RequestId) -> Option<Response> {
         let mut server_data = self.server_data.lock().unwrap();
         while let Some(response) = server_data.responses_unticked.pop_front() {
             if &response.id == id {
@@ -491,28 +492,35 @@ impl LspServer {
         None
     }
 
-    pub fn read_response_exact(&self, id: RequestId, method: impl AsRef<str>) -> Option<Response> {
-        let mut result: Option<Response> = None;
-        let mut server_data = self.server_data.lock().unwrap();
-        let latest_request_tick = server_data.latest_request_tick.clone();
-
-        let mut reserved: VecDeque<Response> = VecDeque::new();
-        for response in server_data.responses.drain(..) {
-            Logger::debug(format!("read_response_exact response {:#?}", response));
+    pub fn find_response_and_drain(&self, id: impl Into<RequestId>) -> Option<Response> {
+        let id = id.into();
+        let (responses, latest_request_tick) = {
+            let mut server_data = self.server_data.lock().unwrap();
+            (std::mem::take(&mut server_data.responses), server_data.latest_request_tick.clone())
+        };
+        let (mut resp_id, mut resp_latest_tick) = (None, None);
+        for response in responses {
             if response.id == id {
-                result = Some(response);
+                if response.request_tick == latest_request_tick {
+                    return Some(response); // perfect match. just return
+                }
+                resp_id = Some(response);
             } else if response.request_tick == latest_request_tick {
-                reserved.push_back(response);
+                resp_latest_tick = Some(response);
+            } else {
+                Logger::debug(format!("read_response_exact: drop {:#?}", response));
             }
-            // responses that don't match either condition are dropped
+
+            if resp_id.is_some() && resp_latest_tick.is_some() {
+                break;
+            }
         }
 
-        server_data.responses.append(&mut reserved);
-
-        if result.is_none() {
-            Logger::trace(format!("read_response_exact get null for request_id {}, method {}", id, method.as_ref()));
+        if let Some(resp) = resp_latest_tick {
+            self.server_data.lock().unwrap().responses.push_front(resp);
         }
-        result
+
+        resp_id
     }
 
     pub fn read_last_notification(&self) -> Option<Notification> {
@@ -1042,15 +1050,11 @@ mod test_dispatcher {
     }
 
     mod notification {
-        use std::i16::MAX;
-
         use super::*;
         use serde_json::json;
 
         #[test]
         fn test_dispatcher_notification_skip() {
-            setup_test_logger();
-
             let test_cases = vec![
                 Notification::new("testDcocument/didOpen"), // not a publishDiagnostics notification
                 Notification::new_params("textDocument/publishDiagnostics", json!({"uri":"dummy", "diagnostics":[]}))
@@ -1072,7 +1076,6 @@ mod test_dispatcher {
         #[test]
         fn test_dispatcher_notification_diag_truncate_max() {
             let uri = "file://a";
-
             let max = MAX_DIAGNOSTICS.load(Ordering::Relaxed) as u32;
             let infos = run_dispatcher_test(|server, dispatcher_tx| {
                 let many_diag = create_publish_diagnostics_notification(uri, 0..(max + 10));
@@ -1108,8 +1111,8 @@ mod test_dispatcher {
             let infos = run_dispatcher_test(|server, dispatcher_tx| {
                 let diag_1_2 = create_publish_diagnostics_notification(uri, 1..2);
                 dispatcher_tx.send(diag_1_2.into()).unwrap();
-                let diag_5_9 = create_publish_diagnostics_notification(uri, 0..0);
-                dispatcher_tx.send(diag_5_9.into()).unwrap();
+                let diag_empty = create_publish_diagnostics_notification(uri, 0..0);
+                dispatcher_tx.send(diag_empty.into()).unwrap();
                 dispatcher_tx.send(Notification::new("exit").into()).unwrap();
             });
             assert_eq!(infos.len(), 0, "Should be empty");
@@ -1133,6 +1136,70 @@ mod test_dispatcher {
             assert_eq!(server_data.notifications.len(), max, "Should store max notifications");
             assert_eq!(server_data.notifications[0].method, format!("{max}"), "Oldest notification");
             assert_eq!(server_data.notifications[max - 1].method, format!("{}", max * 2 - 1), "Newest notification");
+        }
+    }
+}
+
+// request_ticks hash unbounded :( we remove from it on read response_exact
+// not sure how read_exact is working... need to test that there is no race condition
+// - between read last tick and getting response from emacs
+// - overriding responses in rust?
+
+#[cfg(test)]
+mod test_find_response {
+    use super::*;
+    use crate::test_utils::mock_server;
+
+    #[test]
+    fn test_find_response_and_drain() {
+        let test_cases = vec![
+            (vec![("id", "latest")], true, 0),                   // single, id is latest
+            (vec![("id", "latest"), ("id2", "tick2")], true, 0), // multiple, id is latest, first
+            (vec![("id2", "tick2"), ("id", "latest")], true, 0), // multiple, id is latest, not first
+            (vec![("id", "tick1"), ("id2", "latest"), ("id3", "tick3")], true, 1), // multiple, id is not latest, first
+            (vec![("id1", "latest"), ("id2", "tick2"), ("id", "tick3")], true, 1), // multiple, id is not latest, not first
+            (vec![], false, 0),                                                    // not found, empty
+            (vec![("id1", "tick1")], false, 0),                                    // not found, !empty
+            (vec![("id1", "tick1"), ("id2", "latest")], false, 1),                 // not found, !empty + latest
+        ];
+
+        fn create_responses(resps: &Vec<(&str, &str)>) -> Vec<Response> {
+            resps
+                .into_iter()
+                .map(|(id, tick)| {
+                    let mut resp = Response::new_ok(*id, Some("ok")).unwrap();
+                    resp.request_tick = tick.to_string();
+                    resp
+                })
+                .collect()
+        }
+
+        fn create_mock_server_with_responses(resps: Vec<Response>) -> LspServer {
+            let (server, _, _) = mock_server();
+            {
+                let mut server_data = server.server_data.lock().unwrap();
+                server_data.latest_request_tick = "latest".to_string();
+                server_data.responses.extend(resps);
+            }
+            server
+        }
+
+        for (case, found, len) in test_cases {
+            println!("Test case: {case:?}, found={found}, len={len}");
+            let expected_id = RequestId::from("id");
+            let server = create_mock_server_with_responses(create_responses(&case));
+
+            let resp = server.find_response_and_drain("id");
+            assert!(resp.is_some() == found, "Should find={found} for case {case:?}");
+            if let Some(resp) = resp {
+                assert_eq!(resp.id, expected_id, "Should find response with id {expected_id}");
+            }
+
+            let responses = &server.server_data.lock().unwrap().responses;
+            assert_eq!(responses.len(), len, "Should have {len} responses left");
+            if len > 0 {
+                assert_eq!(responses[0].request_tick, "latest", "Should keep latest response");
+            }
         }
     }
 }
