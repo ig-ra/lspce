@@ -404,328 +404,335 @@ fn write_msg_text(out: &mut dyn Write, msg: &str) -> io::Result<()> {
 
 #[cfg(test)]
 mod tests {
-    use super::{
-        read_msg_text, Message, Notification, Request, RequestId, Response, ResponseError, MAX_LSP_HEADER_LEN,
-    };
-    use std::io::{self, BufReader};
+    use super::*;
+    mod serialization {
+        use super::*;
 
-    #[test]
-    fn test_msg_serialization() {
-        let test_cases: [(Message, &str); 4] = [
-            (Request::new_shutdown().into(), r#"{"id":"shutdown","method":"shutdown"}"#),
-            (Notification::new("exit").into(), r#"{"method":"exit"}"#),
-            (Response::new_ok(3, "success").unwrap().into(), r#"{"id":3,"result":"success"}"#),
-            (Response::new_err("", -1, "fail").into(), r#"{"id":"","error":{"code":-1,"message":"fail"}}"#),
-        ];
+        #[test]
+        fn test_msg_serialization() {
+            let test_cases: [(Message, &str); 4] = [
+                (Request::new_shutdown().into(), r#"{"id":"shutdown","method":"shutdown"}"#),
+                (Notification::new("exit").into(), r#"{"method":"exit"}"#),
+                (Response::new_ok(3, "success").unwrap().into(), r#"{"id":3,"result":"success"}"#),
+                (Response::new_err("", -1, "fail").into(), r#"{"id":"","error":{"code":-1,"message":"fail"}}"#),
+            ];
 
-        for (msg, expected_json) in test_cases {
-            let serialized = msg.to_string().unwrap();
-            assert_eq!(serialized, expected_json);
+            for (msg, expected_json_str) in test_cases {
+                assert_eq!(msg.to_string().unwrap(), expected_json_str);
+            }
         }
     }
 
-    #[test]
-    fn test_msg_request_deserialization() {
-        let test_cases = vec![
-            (r#"{"id": 1, "method": "shutdown", "params": null}"#, "shutdown", None), // null params
-            (r#"{"id": "req-abc", "method": "textDocument/hover"}"#, "textDocument/hover", None), // string id, missing params
-            (r#"{"id": 42, "method": "workspace_symbol", "params": {}}"#, "workspace_symbol", None), // empty object params
-            (r#"{"id": 999, "method": "custom/method_123", "params": [1,2,3]}"#, "custom/method_123", None), // array params
-            (r#"{"id": "s12", "method": "custom", "request_tick":"123"}"#, "custom", Some("123".to_string())), // with request_tick
-            (r#"{"id": 2, "method": "m1", "request_tick":"456", "extra":[]}"#, "m1", Some("456".to_string())), // with extra field
-        ];
+    mod deserialization {
+        use super::*;
 
-        for (json_str, method, tick) in test_cases {
-            let msg = Message::from_str(json_str).expect("Msg from str");
-            let json: serde_json::Value = serde_json::from_str(json_str).expect("Serde JSON from str");
-            match (msg.msg_type(), &msg) {
-                ("Request", Message::Request(req)) => {
-                    assert_eq!(req.method, method);
-                    assert_eq!(req.request_tick, tick);
-                    let expected_id: RequestId = serde_json::from_value(json.get("id").unwrap().clone()).unwrap();
-                    assert_eq!(req.id, expected_id, "ID should match");
-                    let expected_params = json.get("params").unwrap_or_default();
-                    assert_eq!(&req.params, expected_params);
+        #[test]
+        fn test_msg_request_deserialization() {
+            let test_cases = vec![
+                (r#"{"id": 1, "method": "shutdown", "params": null}"#, "shutdown", None), // null params
+                (r#"{"id": "req-abc", "method": "textDocument/hover"}"#, "textDocument/hover", None), // string id, missing params
+                (r#"{"id": 42, "method": "workspace_symbol", "params": {}}"#, "workspace_symbol", None), // empty object params
+                (r#"{"id": 999, "method": "custom/method_123", "params": [1,2,3]}"#, "custom/method_123", None), // array params
+                (r#"{"id": "s12", "method": "custom", "request_tick":"123"}"#, "custom", Some("123".to_string())), // with request_tick
+                (r#"{"id": 2, "method": "m1", "request_tick":"456", "extra":[]}"#, "m1", Some("456".to_string())), // with extra field
+            ];
+
+            for (json_str, method, tick) in test_cases {
+                let msg = Message::from_str(json_str).expect("Msg from str");
+                let json: serde_json::Value = serde_json::from_str(json_str).expect("Serde JSON from str");
+                match (msg.msg_type(), &msg) {
+                    ("Request", Message::Request(req)) => {
+                        assert_eq!(req.method, method);
+                        assert_eq!(req.request_tick, tick);
+                        let expected_id: RequestId = serde_json::from_value(json.get("id").unwrap().clone()).unwrap();
+                        assert_eq!(req.id, expected_id, "ID should match");
+                        let expected_params = json.get("params").unwrap_or_default();
+                        assert_eq!(&req.params, expected_params);
+                    }
+                    (typ, _) => panic!("Should be Request (got {typ} <{msg}>)"),
                 }
-                (t, _) => panic!("Should be Request (got {} <{}>)", t, msg),
+                assert_eq!(msg.content(), json_str, "Content should contain original JSON");
             }
-            assert_eq!(msg.content(), json_str, "Content should contain original JSON");
         }
-    }
 
-    #[test]
-    fn test_msg_notification_deserialization() {
-        let test_cases = vec![
-            (r#"{"method": "exit", "params": null}"#, "exit"), // null params
-            (r#"{"method": "initialized"}"#, "initialized"),   // missing params
-            (r#"{"method": "textDocument/didOpen", "params": {"uri": "file://test"}}"#, "textDocument/didOpen"), // object params, slash method
-            (r#"{"method": "extra", "extra":1}"#, "extra"), // extra fields
-        ];
+        #[test]
+        fn test_msg_notification_deserialization() {
+            let test_cases = vec![
+                (r#"{"method": "exit", "params": null}"#, "exit"), // null params
+                (r#"{"method": "initialized"}"#, "initialized"),   // missing params
+                (r#"{"method": "textDocument/didOpen", "params": {"uri": "file://test"}}"#, "textDocument/didOpen"), // object params, slash method
+                (r#"{"method": "extra", "extra":1}"#, "extra"), // extra fields
+            ];
 
-        for (json_str, method) in test_cases {
-            let msg = Message::from_str(json_str).expect("Msg from string");
-            let json: serde_json::Value = serde_json::from_str(json_str).expect("Serde JSON from str");
-            match (msg.msg_type(), &msg) {
-                ("Notification", Message::Notification(notif)) => {
-                    assert_eq!(notif.method, method);
-                    let expected_params = json.get("params").unwrap_or_default();
-                    assert_eq!(&notif.params, expected_params);
+            for (json_str, method) in test_cases {
+                let msg = Message::from_str(json_str).expect("Msg from string");
+                let json: serde_json::Value = serde_json::from_str(json_str).expect("Serde JSON from str");
+                match (msg.msg_type(), &msg) {
+                    ("Notification", Message::Notification(notif)) => {
+                        assert_eq!(notif.method, method);
+                        let expected_params = json.get("params").unwrap_or_default();
+                        assert_eq!(&notif.params, expected_params);
+                    }
+                    (typ, _) => panic!("Should be Request (got {typ} <{msg}>)"),
                 }
-                (t, _) => panic!("Should be Request (got {} <{}>)", t, msg),
+                assert_eq!(msg.content(), json_str, "Content should contain original JSON");
             }
-            assert_eq!(msg.content(), json_str, "Content should contain original JSON");
         }
-    }
 
-    #[test]
-    fn test_msg_response_deserialization() {
-        let test_cases = vec![
-            (r#"{"id": 1, "result": "success"}"#),        // success with string result
-            (r#"{"id": "resp-2", "result": null}"#),      // success with explicit null result
-            (r#"{"id": 4, "result": {}}"#),               // success with empty result
-            (r#"{"id": 5, "result": {"status": "ok"}}"#), // success with data
-            (r#"{"id": 6, "error": null}"#),              // explicit null error
-            (r#"{"id": 8, "error": {"code": -1, "message": "err1"}}"#), // error with no data
-            (r#"{"id": 9, "error": {"code": -2, "message": "err2", "data": {}}}"#), // error with empty data
-            (r#"{"id": 10, "error": {"code": -2, "message": "err2", "data": {"k":"v"}}}"#), // error with some data
-            (r#"{"id": 1, "result": "extra", "foo":"bar"}"#), // extra fields
-        ];
+        #[test]
+        fn test_msg_response_deserialization() {
+            let test_cases = vec![
+                (r#"{"id": 1, "result": "success"}"#),        // success with string result
+                (r#"{"id": "resp-2", "result": null}"#),      // success with explicit null result
+                (r#"{"id": 4, "result": {}}"#),               // success with empty result
+                (r#"{"id": 5, "result": {"status": "ok"}}"#), // success with data
+                (r#"{"id": 6, "error": null}"#),              // explicit null error
+                (r#"{"id": 8, "error": {"code": -1, "message": "err1"}}"#), // error with no data
+                (r#"{"id": 9, "error": {"code": -2, "message": "err2", "data": {}}}"#), // error with empty data
+                (r#"{"id": 10, "error": {"code": -2, "message": "err2", "data": {"k":"v"}}}"#), // error with some data
+                (r#"{"id": 1, "result": "extra", "foo":"bar"}"#), // extra fields
+            ];
 
-        for (json_str) in test_cases {
-            let msg = Message::from_str(json_str).unwrap();
-            let json: serde_json::Value = serde_json::from_str(json_str).expect("Serde JSON from str");
-            match (msg.msg_type(), &msg) {
-                ("Response", Message::Response(resp)) => {
-                    let expected_id: RequestId = serde_json::from_value(json.get("id").unwrap().clone()).unwrap();
-                    assert_eq!(resp.id, expected_id, "ID should match");
+            for (json_str) in test_cases {
+                let msg = Message::from_str(json_str).unwrap();
+                let json: serde_json::Value = serde_json::from_str(json_str).expect("Serde JSON from str");
+                match (msg.msg_type(), &msg) {
+                    ("Response", Message::Response(resp)) => {
+                        let expected_id: RequestId = serde_json::from_value(json.get("id").unwrap().clone()).unwrap();
+                        assert_eq!(resp.id, expected_id, "ID should match");
 
-                    // convert input json to expected result and error
-                    let extract_expected = |key: &str| match json.get(key) {
-                        None => None,
-                        Some(v) if v.is_null() => None,
-                        Some(v) => Some(v.clone()),
-                    };
-                    let expected_result = extract_expected("result");
-                    let expected_error =
-                        extract_expected("error").and_then(|v| serde_json::from_value::<ResponseError>(v.clone()).ok());
+                        // convert input json to expected result and error
+                        let extract_expected = |key: &str| match json.get(key) {
+                            None => None,
+                            Some(v) if v.is_null() => None,
+                            Some(v) => Some(v.clone()),
+                        };
+                        let expected_result = extract_expected("result");
+                        let expected_error = extract_expected("error")
+                            .and_then(|v| serde_json::from_value::<ResponseError>(v.clone()).ok());
 
-                    assert_eq!(resp.result, expected_result, "Result should match");
-                    assert_eq!(resp.error, expected_error, "Error should match");
+                        assert_eq!(resp.result, expected_result, "Result should match");
+                        assert_eq!(resp.error, expected_error, "Error should match");
+                    }
+                    (typ, _) => panic!("Should be Response (got {typ} <{msg}>)"),
                 }
-                (t, _) => panic!("Should be Response (got {} <{}>)", t, msg),
+                assert_eq!(msg.content(), json_str, "Content should contain original JSON");
             }
-            assert_eq!(msg.content(), json_str, "Content should contain original JSON");
         }
-    }
 
-    #[test]
-    fn test_msg_deserialization_err() {
-        let test_cases = vec![
-            (r#"{"id": 3}"#, Message::ERR_RESPONSE_XOR), // Response - implicit null for both result and error
-            (r#"{"foo": "bar"}"#, Message::ERR_MISSING_FIELDS), // Message should have either method or id
-        ];
+        #[test]
+        fn test_msg_deserialization_err() {
+            let test_cases = vec![
+                (r#"{"id": 3}"#, Message::ERR_RESPONSE_XOR), // Response - implicit null for both result and error
+                (r#"{"foo": "bar"}"#, Message::ERR_MISSING_FIELDS), // Message should have either method or id
+            ];
 
-        for (json_str, expected_err) in test_cases {
-            let err = Message::from_str(json_str).expect_err("Msg from str should fail");
-            assert!(err.to_string().contains(expected_err), "Error should be: {}", expected_err);
+            for (json_str, expected_err) in test_cases {
+                let err = Message::from_str(json_str).expect_err("Msg from str should fail");
+                assert!(err.to_string().contains(expected_err), "Error should be: {expected_err}");
+            }
         }
-    }
 
-    #[test]
-    /// Test sring to Message conversion and proper type detection
-    fn test_msg_type_via_from_str() {
-        let test_cases = [
-            (r#"{"id": 1, "method": "shutdown"}"#, "Request"),
-            (r#"{"id": 2, "method": "custom", "request_tick": "12345"}"#, "Request"),
-            (r#"{"id": 3, "result": "success"}"#, "Response"),
-            (r#"{"id": 4, "error": {"code": -1, "message": "test"}}"#, "Response"),
-            (r#"{"method": "exit"}"#, "Notification"),
-        ];
+        #[test]
+        /// Test sring to Message conversion and proper type detection
+        fn test_msg_type_via_from_str() {
+            let test_cases = [
+                (r#"{"id": 1, "method": "shutdown"}"#, "Request"),
+                (r#"{"id": 2, "method": "custom", "request_tick": "12345"}"#, "Request"),
+                (r#"{"id": 3, "result": "success"}"#, "Response"),
+                (r#"{"id": 4, "error": {"code": -1, "message": "test"}}"#, "Response"),
+                (r#"{"method": "exit"}"#, "Notification"),
+            ];
 
-        for (json, expected_type) in test_cases {
-            // always succeed on creating a Message from a valid json. Ensure expected type
-            let message = Message::from_str(json).expect(&format!("Msg from str should succeed: {}", json));
-            assert_eq!(message.msg_type(), expected_type, "Msg type should be {} for: {}", expected_type, json);
+            for (json_str, expected) in test_cases {
+                // always succeed on creating a Message from a valid json. Ensure expected type
+                let message = Message::from_str(json_str).expect(&format!("Msg from str should succeed: {json_str}"));
+                assert_eq!(message.msg_type(), expected, "Msg type should be {expected} for: {json_str}");
 
-            // Try to parse to specific types. Succeed only for expected one
-            for (type_name, result_ok) in [
-                ("Request", Message::from_str_typed::<Request>(json).is_ok()),
-                ("Response", Message::from_str_typed::<Response>(json).is_ok()),
-                ("Notification", Message::from_str_typed::<Notification>(json).is_ok()),
-            ] {
-                let should_succeed = type_name == expected_type;
-                assert_eq!(result_ok, should_succeed, "{} parse for: {}", type_name, json);
+                // Try to parse to specific types. Succeed only for expected one
+                for (type_name, should_succeed) in [
+                    ("Request", Message::from_str_typed::<Request>(json_str).is_ok()),
+                    ("Response", Message::from_str_typed::<Response>(json_str).is_ok()),
+                    ("Notification", Message::from_str_typed::<Notification>(json_str).is_ok()),
+                ] {
+                    assert_eq!(should_succeed, type_name == expected, "{type_name} parse for: {json_str}");
+                }
             }
         }
     }
 
-    struct TestCase {
-        name: &'static str,
-        input: &'static [u8],
-        expected: Result<Option<String>, io::ErrorKind>,
-    }
+    mod read {
+        use super::*;
+        use std::io::{self, BufReader};
 
-    fn run_test_cases<F>(cases: &[TestCase], runner: F)
-    where
-        F: Fn(&[u8]) -> Result<Option<String>, io::Error>,
-    {
-        for case in cases {
-            let msg = format!("Test case <{}> failed ", case.name);
-            let result = runner(case.input);
-            match (result, &case.expected) {
-                (Ok(Some(res)), Ok(Some(exp))) => assert_eq!(res, *exp, "{} (text)", msg),
-                (Ok(None), Ok(None)) => { /* recoverable error, success */ }
-                (Err(e), Err(exp)) => assert_eq!(e.kind(), *exp, "{} (err)", msg),
-                (res, exp) => panic!("{}: Expected {:?}, got {:?}", msg, exp, res),
+        struct TestCase {
+            name: &'static str,
+            input: &'static [u8],
+            expected: Result<Option<String>, io::ErrorKind>,
+        }
+
+        fn run_test_cases<F>(cases: &[TestCase], runner: F)
+        where
+            F: Fn(&[u8]) -> Result<Option<String>, io::Error>,
+        {
+            for case in cases {
+                let msg = format!("Test case <{}> failed ", case.name);
+                let result = runner(case.input);
+                match (result, &case.expected) {
+                    (Ok(Some(res)), Ok(Some(exp))) => assert_eq!(res, *exp, "{msg} (text)"),
+                    (Ok(None), Ok(None)) => { /* recoverable error, success */ }
+                    (Err(e), Err(exp)) => assert_eq!(e.kind(), *exp, "{msg} (err)"),
+                    (res, exp) => panic!("{msg}: Expected {exp:?}, got {res:?}"),
+                }
             }
         }
-    }
 
-    #[test]
-    fn test_read_msg_text() {
-        use std::sync::LazyLock;
-        static LONG_HEADER: LazyLock<Vec<u8>> = LazyLock::new(|| {
-            let mut v = b"Content-Length: 2".to_vec();
-            v.extend(std::iter::repeat(b' ').take(MAX_LSP_HEADER_LEN)); // fill to max length with spaces
-            v.extend_from_slice(b"\r\n\r\n{}"); // valid, but will be discarded due to length limit
-            v
-        });
+        #[test]
+        fn test_read_msg_text() {
+            use std::sync::LazyLock;
+            static LONG_HEADER: LazyLock<Vec<u8>> = LazyLock::new(|| {
+                let mut v = b"Content-Length: 2".to_vec();
+                v.extend(std::iter::repeat(b' ').take(MAX_LSP_HEADER_LEN)); // fill to max length with spaces
+                v.extend_from_slice(b"\r\n\r\n{}"); // valid, but will be discarded due to length limit
+                v
+            });
 
-        let test_cases = vec![
-            // valid cases --------------------------------------------------v
-            TestCase { name: "Valid", input: b"Content-Length: 2\r\n\r\n{}", expected: Ok(Some("{}".to_string())) },
-            TestCase {
-                name: "Valid with 2 headers",
-                input: b"Content-Type: application/jsonrpc; charset=utf-8\r\nContent-Length: 2\r\n\r\n{}",
-                expected: Ok(Some("{}".to_string())),
-            },
-            TestCase { name: "Empty", input: b"Content-Length: 0\r\n\r\n", expected: Ok(Some("".to_string())) },
-            TestCase {
-                name: "Valid With junk",
-                input: b"Content-Length: 2\r\n\r\n{}junk",
-                expected: Ok(Some("{}".to_string())),
-            },
-            // invalid cases ------------------------------------------------v
-            TestCase {
-                name: "Malformed header (header part doesn't end with CRLF)",
-                input: b"Content-Length: 2\r\n{}",
-                expected: Err(io::ErrorKind::InvalidData),
-            },
-            TestCase {
-                name: "Malformed header (no colon)",
-                input: b"Content-Length 2\r\n\r\n",
-                expected: Err(io::ErrorKind::InvalidData),
-            },
-            TestCase {
-                name: "Malformed header (no space after colon)",
-                input: b"Content-Length:2\r\n\r\n{}",
-                expected: Err(io::ErrorKind::InvalidData),
-            },
-            TestCase {
-                name: "No mandatory Content-Length header",
-                input: b"Header: value\r\n\r\n{}",
-                expected: Err(io::ErrorKind::InvalidData),
-            },
-            TestCase {
-                name: "Malformed header (content-Length isn't a number)",
-                input: b"Content-Length: abc\r\n\r\n",
-                expected: Err(io::ErrorKind::InvalidData),
-            },
-            TestCase {
-                name: "Content shorter than Content-Length (EOF)",
-                input: b"Content-Length: 20\r\n\r\nshort",
-                expected: Err(io::ErrorKind::UnexpectedEof),
-            },
-            TestCase {
-                name: "EOF right after headers",
-                input: b"Content-Length: 10\r\n\r\n",
-                expected: Err(io::ErrorKind::UnexpectedEof),
-            },
-            TestCase { name: "Empty input (EOF)", input: b"", expected: Err(io::ErrorKind::UnexpectedEof) },
-            TestCase {
-                name: "Invalid UTF-8 in content",
-                input: b"Content-Length: 4\r\n\r\n\xff\xfe\xfd\xfc",
-                expected: Err(io::ErrorKind::InvalidData),
-            },
-            // edge cases --------------------------------------------------v
-            // will be handled as valid but wrong text (RCRLF instead of {}), since headers should END with \r\n\r\n sequence
-            TestCase {
-                name: "Additional CRLF",
-                input: b"Content-Length: 2\r\n\r\n\r\n{}",
-                expected: Ok(Some("\r\n".to_string())),
-            },
-            // long header exceeding MAX_LSP_HEADER_LEN. Fail to find \r\n in
-            TestCase { name: "Long headers", input: &LONG_HEADER, expected: Err(io::ErrorKind::QuotaExceeded) },
-        ];
+            let test_cases = vec![
+                // valid cases --------------------------------------------------v
+                TestCase { name: "Valid", input: b"Content-Length: 2\r\n\r\n{}", expected: Ok(Some("{}".to_string())) },
+                TestCase {
+                    name: "Valid with 2 headers",
+                    input: b"Content-Type: application/jsonrpc; charset=utf-8\r\nContent-Length: 2\r\n\r\n{}",
+                    expected: Ok(Some("{}".to_string())),
+                },
+                TestCase { name: "Empty", input: b"Content-Length: 0\r\n\r\n", expected: Ok(Some("".to_string())) },
+                TestCase {
+                    name: "Valid With junk",
+                    input: b"Content-Length: 2\r\n\r\n{}junk",
+                    expected: Ok(Some("{}".to_string())),
+                },
+                // invalid cases ------------------------------------------------v
+                TestCase {
+                    name: "Malformed header (header part doesn't end with CRLF)",
+                    input: b"Content-Length: 2\r\n{}",
+                    expected: Err(io::ErrorKind::InvalidData),
+                },
+                TestCase {
+                    name: "Malformed header (no colon)",
+                    input: b"Content-Length 2\r\n\r\n",
+                    expected: Err(io::ErrorKind::InvalidData),
+                },
+                TestCase {
+                    name: "Malformed header (no space after colon)",
+                    input: b"Content-Length:2\r\n\r\n{}",
+                    expected: Err(io::ErrorKind::InvalidData),
+                },
+                TestCase {
+                    name: "No mandatory Content-Length header",
+                    input: b"Header: value\r\n\r\n{}",
+                    expected: Err(io::ErrorKind::InvalidData),
+                },
+                TestCase {
+                    name: "Malformed header (content-Length isn't a number)",
+                    input: b"Content-Length: abc\r\n\r\n",
+                    expected: Err(io::ErrorKind::InvalidData),
+                },
+                TestCase {
+                    name: "Content shorter than Content-Length (EOF)",
+                    input: b"Content-Length: 20\r\n\r\nshort",
+                    expected: Err(io::ErrorKind::UnexpectedEof),
+                },
+                TestCase {
+                    name: "EOF right after headers",
+                    input: b"Content-Length: 10\r\n\r\n",
+                    expected: Err(io::ErrorKind::UnexpectedEof),
+                },
+                TestCase { name: "Empty input (EOF)", input: b"", expected: Err(io::ErrorKind::UnexpectedEof) },
+                TestCase {
+                    name: "Invalid UTF-8 in content",
+                    input: b"Content-Length: 4\r\n\r\n\xff\xfe\xfd\xfc",
+                    expected: Err(io::ErrorKind::InvalidData),
+                },
+                // edge cases --------------------------------------------------v
+                // will be handled as valid but wrong text (RCRLF instead of {}), since headers should END with \r\n\r\n sequence
+                TestCase {
+                    name: "Additional CRLF",
+                    input: b"Content-Length: 2\r\n\r\n\r\n{}",
+                    expected: Ok(Some("\r\n".to_string())),
+                },
+                // long header exceeding MAX_LSP_HEADER_LEN. Fail to find \r\n in
+                TestCase { name: "Long headers", input: &LONG_HEADER, expected: Err(io::ErrorKind::QuotaExceeded) },
+            ];
 
-        run_test_cases(&test_cases, |input| {
-            let mut reader = BufReader::new(input);
-            read_msg_text(&mut reader).map(Some)
-        });
-    }
+            run_test_cases(&test_cases, |input| {
+                let mut reader = BufReader::new(input);
+                read_msg_text(&mut reader).map(Some)
+            });
+        }
 
-    #[test]
-    fn test_message_read() {
-        /// valid and invalid cases for Message::read.
-        /// - invalid, but recoverable cases should return Ok(None),
-        /// - while unrecoverable cases should result in Err (e.g. unexpectedEof)
-        let cases = [
-            // Valid ---------------------------------------------------------v
-            TestCase {
-                name: "Valid Message / Notification",
-                input: b"Content-Length: 17\r\n\r\n{\"method\":\"exit\"}",
-                expected: Ok(Some("{\"method\":\"exit\"}".to_string())),
-            },
-            TestCase {
-                name: "Valid Message / Notification 2",
-                input: b"Content-Length: 18\r\n\r\n{\"method\":\"exit\"} junk",
-                expected: Ok(Some("{\"method\":\"exit\"} ".to_string())),
-            },
-            // recoverable --------------------------------------------------v
-            // malformed headers -> io::ErrorKind::InvalidData
-            TestCase {
-                name: "InvaldData: No space after colon",
-                input: b"Content-Length:17\r\n\r\n{\"method\":\"exit\"}",
-                expected: Ok(None),
-            },
-            TestCase {
-                name: "InvaldData: No content length",
-                input: b"\r\n\r\n{\"method\":\"exit\"}",
-                expected: Ok(None),
-            },
-            TestCase {
-                name: "InvaldData: Missing CRLF",
-                input: b"Content-Length: 17\r\n{\"method\":\"exit\"}",
-                expected: Ok(None),
-            },
-            // deserialization -> serde_json::Error
-            TestCase { name: "Serde: empty JSON", input: b"Content-Length: 2\r\n\r\n{}", expected: Ok(None) },
-            TestCase {
-                name: "Serde: not a Message JSON",
-                input: b"Content-Length: 13\r\n\r\n{\"foo\":\"bar\"}",
-                expected: Ok(None),
-            },
-            TestCase {
-                name: "Serde: Malformed JSON",
-                input: b"Content-Length: 15\r\n\r\n{\"method\":true}",
-                expected: Ok(None),
-            },
-            // unrecoverable ------------------------------------------------v
-            TestCase {
-                name: "Closed pipe / not enough data",
-                input: b"Content-Length: 10\r\n\r\n{",
-                expected: Err(io::ErrorKind::UnexpectedEof),
-            },
-            TestCase { name: "Closed pipe / no data", input: b"", expected: Err(io::ErrorKind::UnexpectedEof) },
-        ];
+        #[test]
+        fn test_message_read() {
+            /// valid and invalid cases for Message::read.
+            /// - invalid, but recoverable cases should return Ok(None),
+            /// - while unrecoverable cases should result in Err (e.g. unexpectedEof)
+            let cases = [
+                // Valid ---------------------------------------------------------v
+                TestCase {
+                    name: "Valid Message / Notification",
+                    input: b"Content-Length: 17\r\n\r\n{\"method\":\"exit\"}",
+                    expected: Ok(Some("{\"method\":\"exit\"}".to_string())),
+                },
+                TestCase {
+                    name: "Valid Message / Notification 2",
+                    input: b"Content-Length: 18\r\n\r\n{\"method\":\"exit\"} junk",
+                    expected: Ok(Some("{\"method\":\"exit\"} ".to_string())),
+                },
+                // recoverable --------------------------------------------------v
+                // malformed headers -> io::ErrorKind::InvalidData
+                TestCase {
+                    name: "InvaldData: No space after colon",
+                    input: b"Content-Length:17\r\n\r\n{\"method\":\"exit\"}",
+                    expected: Ok(None),
+                },
+                TestCase {
+                    name: "InvaldData: No content length",
+                    input: b"\r\n\r\n{\"method\":\"exit\"}",
+                    expected: Ok(None),
+                },
+                TestCase {
+                    name: "InvaldData: Missing CRLF",
+                    input: b"Content-Length: 17\r\n{\"method\":\"exit\"}",
+                    expected: Ok(None),
+                },
+                // deserialization -> serde_json::Error
+                TestCase { name: "Serde: empty JSON", input: b"Content-Length: 2\r\n\r\n{}", expected: Ok(None) },
+                TestCase {
+                    name: "Serde: not a Message JSON",
+                    input: b"Content-Length: 13\r\n\r\n{\"foo\":\"bar\"}",
+                    expected: Ok(None),
+                },
+                TestCase {
+                    name: "Serde: Malformed JSON",
+                    input: b"Content-Length: 15\r\n\r\n{\"method\":true}",
+                    expected: Ok(None),
+                },
+                // unrecoverable ------------------------------------------------v
+                TestCase {
+                    name: "Closed pipe / not enough data",
+                    input: b"Content-Length: 10\r\n\r\n{",
+                    expected: Err(io::ErrorKind::UnexpectedEof),
+                },
+                TestCase { name: "Closed pipe / no data", input: b"", expected: Err(io::ErrorKind::UnexpectedEof) },
+            ];
 
-        run_test_cases(&cases, |input| {
-            let mut reader = BufReader::new(input);
-            match Message::_read(&mut reader) {
-                Ok(Some(msg)) => Ok(Some(msg.content().to_string())),
-                Ok(None) => Ok(None),
-                Err(e) => Err(e),
-            }
-        });
+            run_test_cases(&cases, |input| {
+                let mut reader = BufReader::new(input);
+                match Message::_read(&mut reader) {
+                    Ok(Some(msg)) => Ok(Some(msg.content().to_string())),
+                    Ok(None) => Ok(None),
+                    Err(e) => Err(e),
+                }
+            });
+        }
     }
 }
